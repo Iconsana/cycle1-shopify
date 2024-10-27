@@ -1,11 +1,8 @@
-# main.py
 from flask import Flask, request, redirect, jsonify
 import shopify
 from config import *
 from scraper import scrape_acdc_products
-import schedule
-import time
-import threading
+import os
 
 app = Flask(__name__)
 
@@ -42,7 +39,6 @@ def callback():
 @app.route('/sync', methods=['POST'])
 def trigger_sync():
     try:
-        # Get products from ACDC
         products = scrape_acdc_products()
         successful_updates = 0
         
@@ -50,7 +46,6 @@ def trigger_sync():
             session = setup_shopify_session()
             for product in products:
                 try:
-                    # Create/update product in Shopify
                     shopify_product = shopify.Product()
                     shopify_product.title = product['title']
                     shopify_product.variants = [{
@@ -80,4 +75,5 @@ def trigger_sync():
         }), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
