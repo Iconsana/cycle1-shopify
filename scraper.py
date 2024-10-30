@@ -6,20 +6,20 @@ import re
 
 def clean_price(price_str):
     """Clean price string and convert to float."""
-    price_str = price_str.replace('EXCL. VAT', '').replace('R', '').strip()
-    price_str = re.sub(r'[^\d.,]', '', price_str)
-    price_str = price_str.replace(',', '.')
-    return float(price_str)
+    try:
+        price_str = price_str.replace('EXCL. VAT', '').replace('R', '').strip()
+        price_str = re.sub(r'[^\d.,]', '', price_str).replace(',', '.')
+        return float(price_str)
+    except ValueError as e:
+        print(f"Error converting price: {e}")
+        return 0.0
 
 def extract_product_code(product_element):
     """Extract only the product code from the product."""
     try:
-        # Find product code section
         description = product_element.find('div', class_='product-description')
         if description:
-            # The product code is typically after the last occurrence of product title
             text_content = description.get_text()
-            # Use regex to find the product code pattern (usually all caps with numbers and dashes)
             product_code_match = re.search(r'[A-Z0-9-]+(?=\s*(?:List Price|$))', text_content)
             if product_code_match:
                 return product_code_match.group().strip()
@@ -30,13 +30,10 @@ def extract_product_code(product_element):
 def clean_title(title_text):
     """Clean the product title."""
     try:
-        # Remove inventory status, category, and price information
         title = re.sub(r'In Stock.*?(?=[A-Z0-9])', '', title_text, flags=re.DOTALL)
         title = re.sub(r'List Price.*', '', title, flags=re.DOTALL)
         title = re.sub(r'LIGHTING|INSTALLATION & WIRING ACCESSORIES.*?(?=[A-Z0-9])', '', title, flags=re.DOTALL)
-        # Remove multiple spaces and trim
-        title = ' '.join(title.split())
-        return title.strip()
+        return ' '.join(title.split()).strip()
     except Exception as e:
         print(f"Error cleaning title: {e}")
         return title_text
@@ -74,23 +71,20 @@ def scrape_acdc_products(max_pages=5):
             
             for product in product_containers:
                 try:
-                    # Get product code first
                     product_code = extract_product_code(product)
                     if not product_code:
                         print("Skipping product - no code found")
                         continue
 
-                    # Get raw title and clean it
-                    raw_title = product.find('h2', class_='h3').find('a').get_text(strip=True)
+                    title_element = product.find('h2', class_='h3').find('a')
+                    raw_title = title_element.get_text(strip=True) if title_element else ""
                     clean_product_title = clean_title(raw_title)
                     
-                    # Get price
                     price_span = product.find('span', class_='product-price')
                     if price_span:
                         original_price = clean_price(price_span.get_text(strip=True))
-                        marked_up_price = round(original_price * 1.1, 2)  # 10% markup
+                        marked_up_price = round(original_price * 1.1, 2)
                         
-                        # Create Shopify-structured product data
                         product_data = {
                             'Handle': product_code.lower(),
                             'Title': clean_product_title,
@@ -136,7 +130,6 @@ def save_to_shopify_csv(products, filename=None):
     
     df = pd.DataFrame(products)
     
-    # Ensure columns are in correct order
     shopify_columns = [
         'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 
         'Tags', 'Published', 'Option1 Name', 'Option1 Value', 'Variant SKU',
@@ -146,7 +139,6 @@ def save_to_shopify_csv(products, filename=None):
         'Status'
     ]
     
-    # Reorder columns and fill missing ones with empty strings
     for col in shopify_columns:
         if col not in df.columns:
             df[col] = ''
