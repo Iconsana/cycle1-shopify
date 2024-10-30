@@ -11,12 +11,45 @@ def clean_price(price_str):
     price_str = price_str.replace(',', '.')
     return float(price_str)
 
-def get_product_sku(product_element):
-    """Extract SKU from product link text."""
-    sku_element = product_element.find('h2', class_='h3').find('a')
-    if sku_element:
-        return sku_element.get_text(strip=True)
+def extract_product_code(product_element):
+    """Extract only the product code from the product."""
+    try:
+        # Find product code section
+        description = product_element.find('div', class_='product-description')
+        if description:
+            # The product code is typically after the last occurrence of product title
+            text_content = description.get_text()
+            # Use regex to find the product code pattern (usually all caps with numbers and dashes)
+            product_code_match = re.search(r'[A-Z0-9-]+(?=\s*(?:List Price|$))', text_content)
+            if product_code_match:
+                return product_code_match.group().strip()
+    except Exception as e:
+        print(f"Error extracting product code: {e}")
     return None
+
+def clean_title(title_text):
+    """Clean the product title."""
+    try:
+        # Remove inventory status, category, and price information
+        title = re.sub(r'In Stock.*?(?=[A-Z0-9])', '', title_text, flags=re.DOTALL)
+        title = re.sub(r'List Price.*', '', title, flags=re.DOTALL)
+        title = re.sub(r'LIGHTING|INSTALLATION & WIRING ACCESSORIES.*?(?=[A-Z0-9])', '', title, flags=re.DOTALL)
+        # Remove multiple spaces and trim
+        title = ' '.join(title.split())
+        return title.strip()
+    except Exception as e:
+        print(f"Error cleaning title: {e}")
+        return title_text
+
+def create_clean_description(product_code, title):
+    """Create a clean HTML description."""
+    return f"""
+    <div class="product-description">
+        <p>Product Code: {product_code}</p>
+        <p>{title}</p>
+        <p>Imported from ACDC Dynamics</p>
+    </div>
+    """
 
 def scrape_acdc_products(max_pages=5):
     base_url = 'https://acdc.co.za/2-home'
@@ -41,31 +74,38 @@ def scrape_acdc_products(max_pages=5):
             
             for product in product_containers:
                 try:
-                    # Get SKU (product code) and title
-                    sku = get_product_sku(product)
-                    description = product.find('div', class_='product-description').get_text(strip=True)
-                    price_span = product.find('span', class_='product-price')
+                    # Get product code first
+                    product_code = extract_product_code(product)
+                    if not product_code:
+                        print("Skipping product - no code found")
+                        continue
+
+                    # Get raw title and clean it
+                    raw_title = product.find('h2', class_='h3').find('a').get_text(strip=True)
+                    clean_product_title = clean_title(raw_title)
                     
-                    if price_span and sku:
+                    # Get price
+                    price_span = product.find('span', class_='product-price')
+                    if price_span:
                         original_price = clean_price(price_span.get_text(strip=True))
                         marked_up_price = round(original_price * 1.1, 2)  # 10% markup
                         
                         # Create Shopify-structured product data
                         product_data = {
-                            'Handle': sku.lower(),  # Use SKU for handle
-                            'Title': description,   # Use full description as title
-                            'Body (HTML)': f'Product Code: {sku}<br>Imported from ACDC.',
+                            'Handle': product_code.lower(),
+                            'Title': clean_product_title,
+                            'Body (HTML)': create_clean_description(product_code, clean_product_title),
                             'Vendor': 'ACDC',
                             'Product Category': 'Electrical & Electronics',
                             'Type': 'Electrical Components',
-                            'Tags': f'ACDC, {sku}',
+                            'Tags': f'ACDC, {product_code}',
                             'Published': 'TRUE',
                             'Option1 Name': 'Title',
                             'Option1 Value': 'Default Title',
-                            'Variant SKU': sku,     # Use product code as SKU
+                            'Variant SKU': product_code,
                             'Variant Grams': '0',
                             'Variant Inventory Tracker': 'shopify',
-                            'Variant Inventory Qty': '100',  # Default stock
+                            'Variant Inventory Qty': '100',
                             'Variant Inventory Policy': 'deny',
                             'Variant Fulfillment Service': 'manual',
                             'Variant Price': str(marked_up_price),
@@ -76,7 +116,7 @@ def scrape_acdc_products(max_pages=5):
                         }
                         
                         products.append(product_data)
-                        print(f"Successfully scraped: {sku} - Original: R{original_price} - Marked up: R{marked_up_price}")
+                        print(f"Successfully scraped: {product_code} - {clean_product_title}")
                     
                 except Exception as e:
                     print(f"Error processing product: {e}")
