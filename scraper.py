@@ -14,13 +14,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def clean_price(price_str):
+    """Clean price string and convert to float."""
+    try:
+        price_str = price_str.replace('EXCL. VAT', '').replace('R', '').strip()
+        price_str = re.sub(r'[^\d.,]', '', price_str).replace(',', '.')
+        return float(price_str)
+    except ValueError as e:
+        logger.error(f"Error converting price: {e}")
+        return 0.0
+
+def extract_product_code(product_element):
+    """Extract only the product code from the product."""
+    try:
+        description = product_element.find('div', class_='product-description')
+        if description:
+            text_content = description.get_text()
+            product_code_match = re.search(r'[A-Z0-9-]+(?=\s*(?:List Price|$))', text_content)
+            if product_code_match:
+                return product_code_match.group().strip()
+    except Exception as e:
+        logger.error(f"Error extracting product code: {e}")
+    return None
+
+def clean_title(title_text):
+    """Clean the product title."""
+    try:
+        title = re.sub(r'In Stock.*?(?=[A-Z0-9])', '', title_text, flags=re.DOTALL)
+        title = re.sub(r'List Price.*', '', title, flags=re.DOTALL)
+        title = re.sub(r'LIGHTING|INSTALLATION & WIRING ACCESSORIES.*?(?=[A-Z0-9])', '', title, flags=re.DOTALL)
+        return ' '.join(title.split()).strip()
+    except Exception as e:
+        logger.error(f"Error cleaning title: {e}")
+        return title_text
+
+def create_clean_description(product_code, title):
+    """Create a clean HTML description."""
+    return f"""
+    <div class="product-description">
+        <p>Product Code: {product_code}</p>
+        <p>{title}</p>
+        <p>Imported from ACDC Dynamics</p>
+    </div>
+    """
+
 def get_total_pages(soup: BeautifulSoup) -> Optional[int]:
     """Extract the total number of pages from pagination."""
     try:
-        # Find pagination links
         pagination = soup.find('div', class_='pagination')
         if pagination:
-            # Find all page numbers
             page_links = pagination.find_all('a', class_='js-search-link')
             page_numbers = [
                 int(re.search(r'page=(\d+)', link.get('href', '')).group(1))
@@ -47,19 +89,20 @@ def make_request(url: str, max_retries: int = 3, delay: int = 2) -> Optional[req
         except requests.RequestException as e:
             logger.error(f"Attempt {attempt + 1}/{max_retries} failed for {url}: {e}")
             if attempt < max_retries - 1:
-                sleep_time = delay * (attempt + 1)  # Exponential backoff
+                sleep_time = delay * (attempt + 1)
                 logger.info(f"Waiting {sleep_time} seconds before retry...")
                 time.sleep(sleep_time)
             continue
     return None
 
-def scrape_acdc_products(start_page: int = 1, end_page: Optional[int] = None) -> List[Dict]:
+def scrape_acdc_products(start_page: int = 1, end_page: Optional[int] = None, max_pages: int = 4176):
     """
     Scrape products from ACDC website with pagination support.
     
     Args:
         start_page: Page number to start scraping from
-        end_page: Optional page number to stop at. If None, will scrape all pages
+        end_page: Optional page number to stop at. If None, will detect from website
+        max_pages: Maximum number of pages to scrape (default matches known last page)
     """
     base_url = 'https://acdc.co.za/2-home'
     products = []
@@ -73,8 +116,8 @@ def scrape_acdc_products(start_page: int = 1, end_page: Optional[int] = None) ->
             soup = BeautifulSoup(response.content, 'html.parser')
             end_page = get_total_pages(soup)
             if not end_page:
-                logger.warning("Could not detect total pages, defaulting to page 4176")
-                end_page = 4176
+                logger.warning(f"Could not detect total pages, defaulting to {max_pages}")
+                end_page = max_pages
         else:
             logger.error("Failed to access the website")
             return products
@@ -97,10 +140,6 @@ def scrape_acdc_products(start_page: int = 1, end_page: Optional[int] = None) ->
         
         if not product_containers:
             logger.warning(f"No products found on page {current_page}")
-            # If we get multiple empty pages, we might have reached the end
-            if current_page > 3:
-                logger.info("Multiple empty pages detected, ending scrape...")
-                break
         
         page_products = 0
         for product in product_containers:
@@ -162,11 +201,35 @@ def scrape_acdc_products(start_page: int = 1, end_page: Optional[int] = None) ->
     logger.info(f"Scraping completed. Total products scraped: {total_products}")
     return products
 
+def save_to_shopify_csv(products, filename=None):
+    """Save products to Shopify-compatible CSV format."""
+    if not filename:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'acdc_products_shopify_{timestamp}.csv'
+    
+    df = pd.DataFrame(products)
+    
+    shopify_columns = [
+        'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 
+        'Tags', 'Published', 'Option1 Name', 'Option1 Value', 'Variant SKU',
+        'Variant Grams', 'Variant Inventory Tracker', 'Variant Inventory Qty',
+        'Variant Inventory Policy', 'Variant Fulfillment Service', 'Variant Price',
+        'Variant Compare At Price', 'Variant Requires Shipping', 'Variant Taxable',
+        'Status'
+    ]
+    
+    for col in shopify_columns:
+        if col not in df.columns:
+            df[col] = ''
+    
+    df = df[shopify_columns]
+    df.to_csv(filename, index=False)
+    logger.info(f"Saved {len(products)} products to {filename}")
+    return filename
+
 if __name__ == "__main__":
-    # Example usage with progress tracking
     try:
-        # Scrape first 10 pages as a test
-        products = scrape_acdc_products(start_page=1, end_page=10)
+        products = scrape_acdc_products(start_page=1)
         if products:
             filename = save_to_shopify_csv(products)
             logger.info(f"Products saved to {filename}")
