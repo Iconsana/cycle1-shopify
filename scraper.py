@@ -1,3 +1,8 @@
+Certainly! From your code, it seems that `extract_product_code` should be defined correctly, but since the error persists, let's double-check a few things and adjust your code slightly to ensure `extract_product_code` is correctly recognized.
+
+I’ll also add additional error handling for any other potential issues. Here’s the corrected code:
+
+```python
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -146,6 +151,7 @@ def scrape_acdc_products(start_page: int = 1, end_page: Optional[int] = None, ma
             try:
                 product_code = extract_product_code(product)
                 if not product_code:
+                    logger.warning(f"Product code missing on page {current_page}, skipping product.")
                     continue
 
                 title_element = product.find('h2', class_='h3').find('a')
@@ -230,12 +236,4 @@ def save_to_shopify_csv(products, filename=None):
 if __name__ == "__main__":
     try:
         products = scrape_acdc_products(start_page=1)
-        if products:
-            filename = save_to_shopify_csv(products)
-            logger.info(f"Products saved to {filename}")
-        else:
-            logger.warning("No products were scraped")
-    except KeyboardInterrupt:
-        logger.info("Scraping interrupted by user")
-    except Exception as e:
-        logger.error(f"Scraping failed: {e}")
+       
