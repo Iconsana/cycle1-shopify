@@ -1,8 +1,3 @@
-Certainly! From your code, it seems that `extract_product_code` should be defined correctly, but since the error persists, let's double-check a few things and adjust your code slightly to ensure `extract_product_code` is correctly recognized.
-
-I’ll also add additional error handling for any other potential issues. Here’s the corrected code:
-
-```python
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
