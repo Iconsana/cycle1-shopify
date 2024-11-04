@@ -1,149 +1,93 @@
-# tasks.py
-from celery import Celery
-import redis
-from flask import current_app
-import os
-import json
+from app import celery
+from app.scraper import scrape_acdc_products
+import logging
 from datetime import datetime
+import json
+import redis
 
-# Setup Celery
-celery = Celery('tasks', broker='redis://localhost:6379/0')
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Setup Redis for storing progress
+# Redis client for storing progress
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-class ChunkedScraper:
-    def __init__(self, chunk_size=100):
-        self.chunk_size = chunk_size
-        self.redis_client = redis_client
-
-    def get_job_progress(self, job_id):
-        """Get progress of a scraping job"""
-        progress = self.redis_client.get(f"job_progress:{job_id}")
-        return json.loads(progress) if progress else None
-
-    def save_progress(self, job_id, current_page, total_products, status):
-        """Save job progress to Redis"""
-        progress = {
-            'job_id': job_id,
-            'current_page': current_page,
-            'total_products': total_products,
-            'status': status,
-            'last_updated': datetime.now().isoformat()
-        }
-        self.redis_client.set(
-            f"job_progress:{job_id}",
-            json.dumps(progress),
-            ex=86400  # Expire after 24 hours
-        )
+def update_progress(job_id, current_page, total_pages, products_count, status):
+    """Update job progress in Redis"""
+    progress = {
+        'job_id': job_id,
+        'current_page': current_page,
+        'total_pages': total_pages,
+        'products_count': products_count,
+        'status': status,
+        'timestamp': datetime.now().isoformat()
+    }
+    redis_client.set(
+        f'scrape_progress:{job_id}',
+        json.dumps(progress),
+        ex=86400  # Expire after 24 hours
+    )
 
 @celery.task(bind=True)
-def scrape_chunk(self, start_page, end_page, job_id):
-    """Scrape a chunk of pages"""
-    scraper = ChunkedScraper()
-    products = []
-    current_page = start_page
+def scrape_products_task(self, start_page=1, end_page=None, category=None):
+    """Celery task for scraping products"""
+    job_id = self.request.id
+    total_products = 0
     
-    while current_page <= end_page:
-        try:
-            # Scrape page
-            page_products = scrape_page(current_page)
-            products.extend(page_products)
-            
-            # Update progress
-            scraper.save_progress(
-                job_id,
-                current_page,
-                len(products),
-                'in_progress'
-            )
-            
-            # Save chunk if we've reached chunk size
-            if len(products) >= scraper.chunk_size:
-                save_chunk(products, job_id, current_page)
-                products = []  # Clear products after saving
-                
-        except Exception as e:
-            scraper.save_progress(
-                job_id,
-                current_page,
-                len(products),
-                f'error: {str(e)}'
-            )
-            raise
-            
-        current_page += 1
-    
-    # Save any remaining products
-    if products:
-        save_chunk(products, job_id, current_page)
-    
-    # Mark job as complete
-    scraper.save_progress(job_id, end_page, len(products), 'completed')
-    return job_id
-
-def save_chunk(products, job_id, current_page):
-    """Save a chunk of products to CSV"""
-    if not products:
-        return
-        
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'products_chunk_{job_id}_{current_page}_{timestamp}.csv'
-    
-    df = pd.DataFrame(products)
-    df.to_csv(f'chunks/{filename}', index=False)
-    return filename
-
-# main.py modifications
-from flask import Flask, jsonify, send_file
-from celery.result import AsyncResult
-
-app = Flask(__name__)
-
-@app.route('/start-scrape', methods=['POST'])
-def start_scrape():
-    """Start a new scraping job"""
-    chunk_size = int(request.args.get('chunk_size', 100))
-    total_pages = 4176  # Total known pages
-    
-    # Create job ID
-    job_id = f"scrape_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
-    # Start background task
-    task = scrape_chunk.delay(1, total_pages, job_id)
-    
-    return jsonify({
-        'job_id': job_id,
-        'task_id': task.id,
-        'status': 'started',
-        'message': 'Scraping started in background'
-    })
-
-@app.route('/job-status/<job_id>')
-def job_status(job_id):
-    """Get status of a scraping job"""
-    scraper = ChunkedScraper()
-    progress = scraper.get_job_progress(job_id)
-    
-    if not progress:
-        return jsonify({'error': 'Job not found'}), 404
-        
-    return jsonify(progress)
-
-@app.route('/download-chunk/<job_id>/<chunk_number>')
-def download_chunk(job_id, chunk_number):
-    """Download a specific chunk of products"""
     try:
-        chunk_files = os.listdir('chunks')
-        target_file = [f for f in chunk_files if f.startswith(f'products_chunk_{job_id}_{chunk_number}_')]
+        # Initialize progress
+        update_progress(job_id, start_page, end_page or "unknown", 0, "started")
         
-        if not target_file:
-            return jsonify({'error': 'Chunk not found'}), 404
-            
-        return send_file(
-            f'chunks/{target_file[0]}',
-            mimetype='text/csv',
-            as_attachment=True
+        # Start scraping
+        products = scrape_acdc_products(
+            start_page=start_page,
+            end_page=end_page,
+            category=category
         )
+        
+        if products:
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'acdc_products_{timestamp}.csv'
+            
+            # Save to CSV
+            import pandas as pd
+            df = pd.DataFrame(products)
+            df.to_csv(f'static/exports/{filename}', index=False)
+            
+            # Update final progress
+            update_progress(
+                job_id,
+                end_page or "complete",
+                end_page or "complete",
+                len(products),
+                "completed"
+            )
+            
+            return {
+                'status': 'success',
+                'filename': filename,
+                'products_count': len(products)
+            }
+            
+        else:
+            update_progress(job_id, 0, 0, 0, "failed")
+            return {
+                'status': 'error',
+                'message': 'No products found'
+            }
+            
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Scraping error: {str(e)}")
+        update_progress(job_id, 0, 0, 0, f"error: {str(e)}")
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+def get_job_progress(job_id):
+    """Get progress of a specific job"""
+    progress = redis_client.get(f'scrape_progress:{job_id}')
+    if progress:
+        return json.loads(progress)
+    return None
