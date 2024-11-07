@@ -1,11 +1,10 @@
-# main.py
-from flask import Flask, request, redirect, jsonify, send_file
-import pandas as pd
+# app/main.py
+from flask import request, jsonify, send_file
 from datetime import datetime
 import os
-from scraper import scrape_acdc_products
-
-app = Flask(__name__)
+from app import app  # Import the Flask app instance
+from app.scraper import scrape_acdc_products
+from app.tasks import scrape_products_task  # Import Celery task
 
 def generate_csv():
     """Generate CSV from scraped products"""
@@ -43,24 +42,39 @@ def download_csv():
 def sync_products():
     """Generate CSV and return download link"""
     try:
-        filename = generate_csv()
-        if filename:
-            download_url = f"https://{request.host}/download-csv"
-            return jsonify({
-                'success': True,
-                'message': f'Successfully scraped products. Click the link below to download:',
-                'download_url': download_url,
-                'filename': filename
-            })
+        # Start celery task
+        task = scrape_products_task.delay()
         return jsonify({
-            'success': False,
-            'message': 'No products found to sync'
+            'success': True,
+            'message': 'Scraping started. Check status using the task ID.',
+            'task_id': task.id
         })
     except Exception as e:
         return jsonify({
             'success': False,
             'message': str(e)
         }), 500
+
+@app.route('/status/<task_id>')
+def task_status(task_id):
+    """Check task status"""
+    task = scrape_products_task.AsyncResult(task_id)
+    if task.state == 'PENDING':
+        response = {
+            'state': task.state,
+            'status': 'Pending...'
+        }
+    elif task.state == 'SUCCESS':
+        response = {
+            'state': task.state,
+            'result': task.result
+        }
+    else:
+        response = {
+            'state': task.state,
+            'status': str(task.info)
+        }
+    return jsonify(response)
 
 @app.route('/')
 def index():
@@ -76,6 +90,4 @@ def index():
     </a>
     """
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+# Remove the if __name__ == '__main__' block since we're using gunicorn
