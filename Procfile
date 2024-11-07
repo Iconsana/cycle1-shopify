@@ -1,2 +1,2 @@
-web: python app/main.py
+web: ls -R /app && python app/main.py
 
