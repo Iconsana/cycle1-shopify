@@ -6,15 +6,194 @@
     <title>ACDC Product Scraper</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React and ReactDOM -->
-    <script crossorigin src="https://unpkg.com/react@17/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
-    <!-- Babel for JSX -->
-    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <style>
+        .progress-bar {
+            transition: width 0.3s ease-in-out;
+        }
+    </style>
 </head>
-<body>
-    <div id="root"></div>
-    <!-- Load our React component -->
-    <script type="text/babel" src="{{ url_for('static', filename='js/scraper-dashboard.jsx') }}"></script>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="mb-8 text-center">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">ACDC Product Scraper</h1>
+            <p class="text-gray-600">Automate product synchronization with Shopify</p>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <h2 class="text-2xl font-semibold mb-4">Scraping Options</h2>
+            
+            <!-- Scraping Form -->
+            <form id="scrapeForm" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Category Selection -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                        <select id="category" name="category" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                            <option value="">All Categories</option>
+                            <!-- Categories loaded dynamically -->
+                        </select>
+                    </div>
+
+                    <!-- Page Range -->
+                    <div class="flex space-x-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Start Page</label>
+                            <input type="number" id="startPage" name="start_page" min="1" value="1" 
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">End Page</label>
+                            <input type="number" id="endPage" name="end_page" min="1"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit Button -->
+                <button type="submit" 
+                        class="w-full bg-blue-600 text-white px-6 py-3 rounded-md hover:bg-blue-700 transition-colors">
+                    Start Scraping
+                </button>
+            </form>
+        </div>
+
+        <!-- Status Panel -->
+        <div id="statusPanel" class="bg-white rounded-lg shadow-md p-6 mb-8 hidden">
+            <h2 class="text-2xl font-semibold mb-4">Scraping Status</h2>
+            
+            <!-- Progress Bar -->
+            <div class="mb-4">
+                <div class="w-full bg-gray-200 rounded-full h-4">
+                    <div id="progressBar" class="progress-bar bg-blue-600 h-4 rounded-full" style="width: 0%"></div>
+                </div>
+                <p id="progressText" class="text-sm text-gray-600 mt-2">Starting...</p>
+            </div>
+
+            <!-- Download Section -->
+            <div id="downloadSection" class="hidden">
+                <a id="downloadLink" href="#" 
+                   class="inline-block bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700 transition-colors">
+                    Download CSV
+                </a>
+            </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div id="resultsPanel" class="bg-white rounded-lg shadow-md p-6 hidden">
+            <h2 class="text-2xl font-semibold mb-4">Results</h2>
+            <div id="resultsContent" class="space-y-2">
+                <!-- Results populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load categories
+            fetch('/categories')
+                .then(response => response.json())
+                .then(categories => {
+                    const select = document.getElementById('category');
+                    categories.forEach(category => {
+                        const option = document.createElement('option');
+                        option.value = category;
+                        option.textContent = category;
+                        select.appendChild(option);
+                    });
+                });
+
+            // Handle form submission
+            document.getElementById('scrapeForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                // Show status panel
+                document.getElementById('statusPanel').classList.remove('hidden');
+                document.getElementById('downloadSection').classList.add('hidden');
+                
+                // Get form data
+                const formData = new FormData(this);
+                
+                // Start scraping
+                fetch('/sync', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        pollStatus(data.task_id);
+                    } else {
+                        showError(data.message);
+                    }
+                })
+                .catch(error => showError(error));
+            });
+
+            function pollStatus(taskId) {
+                const interval = setInterval(() => {
+                    fetch(`/status/${taskId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            updateProgress(data);
+                            
+                            if (['SUCCESS', 'FAILURE'].includes(data.state)) {
+                                clearInterval(interval);
+                                if (data.state === 'SUCCESS') {
+                                    showResult(data.result);
+                                }
+                            }
+                        });
+                }, 1000);
+            }
+
+            function updateProgress(data) {
+                const progressBar = document.getElementById('progressBar');
+                const progressText = document.getElementById('progressText');
+                
+                if (data.state === 'PROGRESS') {
+                    const percent = data.percent || 0;
+                    progressBar.style.width = `${percent}%`;
+                    progressText.textContent = data.status || 'Processing...';
+                } else if (data.state === 'SUCCESS') {
+                    progressBar.style.width = '100%';
+                    progressText.textContent = 'Completed!';
+                }
+            }
+
+            function showResult(result) {
+                const downloadSection = document.getElementById('downloadSection');
+                const downloadLink = document.getElementById('downloadLink');
+                
+                if (result.file) {
+                    downloadLink.href = `/download/${result.file}`;
+                    downloadSection.classList.remove('hidden');
+                    
+                    // Show results
+                    const resultsPanel = document.getElementById('resultsPanel');
+                    const resultsContent = document.getElementById('resultsContent');
+                    resultsPanel.classList.remove('hidden');
+                    resultsContent.innerHTML = `
+                        <p>Products scraped: ${result.count}</p>
+                        <p>File name: ${result.file}</p>
+                        <p>Completed at: ${new Date().toLocaleString()}</p>
+                    `;
+                }
+            }
+
+            function showError(message) {
+                const resultsPanel = document.getElementById('resultsPanel');
+                const resultsContent = document.getElementById('resultsContent');
+                resultsPanel.classList.remove('hidden');
+                resultsContent.innerHTML = `
+                    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+                        Error: ${message}
+                    </div>
+                `;
+            }
+        });
+    </script>
 </body>
 </html>
