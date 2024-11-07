@@ -1,93 +1,139 @@
+# app/tasks.py
 from app import celery
-from app.scraper import scrape_acdc_products
-import logging
+from app.scraper import scrape_acdc_products, save_to_csv
+from celery.utils.log import get_task_logger
+import os
 from datetime import datetime
 import json
-import redis
+from app.config import (
+    UPLOAD_FOLDER,
+    MAX_PAGES,
+    MARKUP_PERCENTAGE
+)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Redis client for storing progress
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
-
-def update_progress(job_id, current_page, total_pages, products_count, status):
-    """Update job progress in Redis"""
-    progress = {
-        'job_id': job_id,
-        'current_page': current_page,
-        'total_pages': total_pages,
-        'products_count': products_count,
-        'status': status,
-        'timestamp': datetime.now().isoformat()
-    }
-    redis_client.set(
-        f'scrape_progress:{job_id}',
-        json.dumps(progress),
-        ex=86400  # Expire after 24 hours
-    )
+# Configure logger for tasks
+logger = get_task_logger(__name__)
 
 @celery.task(bind=True)
 def scrape_products_task(self, start_page=1, end_page=None, category=None):
-    """Celery task for scraping products"""
-    job_id = self.request.id
-    total_products = 0
-    
+    """
+    Celery task for scraping products with progress tracking
+    """
     try:
         # Initialize progress
-        update_progress(job_id, start_page, end_page or "unknown", 0, "started")
-        
+        self.update_state(
+            state='PROGRESS',
+            meta={'current': 0, 'total': end_page or MAX_PAGES, 'status': 'Starting scrape...'}
+        )
+
         # Start scraping
+        products = scrape_acdc_products(
+            start_page=start_page,
+            end_page=end_page,
+            max_pages=MAX_PAGES
+        )
+
+        if products:
+            # Generate timestamp-based filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'acdc_products_{timestamp}.csv'
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+
+            # Save to CSV
+            save_to_csv(products, filepath)
+
+            # Task completion metadata
+            result = {
+                'status': 'completed',
+                'file': filename,
+                'count': len(products),
+                'timestamp': timestamp,
+                'download_url': f'/download/{filename}'
+            }
+
+            logger.info(f"Scraping completed: {len(products)} products saved to {filename}")
+            return result
+
+        else:
+            logger.warning("No products were scraped")
+            return {
+                'status': 'completed',
+                'error': 'No products found',
+                'count': 0
+            }
+
+    except Exception as e:
+        logger.error(f"Scraping failed: {str(e)}", exc_info=True)
+        raise
+
+@celery.task(bind=True)
+def process_category_task(self, category, start_page=1, end_page=None):
+    """
+    Task for processing specific product categories
+    """
+    try:
+        self.update_state(
+            state='PROGRESS',
+            meta={'status': f'Processing category: {category}'}
+        )
+
+        # Implement category-specific scraping logic here
         products = scrape_acdc_products(
             start_page=start_page,
             end_page=end_page,
             category=category
         )
-        
+
         if products:
-            # Generate filename with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'acdc_products_{timestamp}.csv'
+            filename = f'acdc_{category}_{timestamp}.csv'
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
             
-            # Save to CSV
-            import pandas as pd
-            df = pd.DataFrame(products)
-            df.to_csv(f'static/exports/{filename}', index=False)
-            
-            # Update final progress
-            update_progress(
-                job_id,
-                end_page or "complete",
-                end_page or "complete",
-                len(products),
-                "completed"
-            )
+            save_to_csv(products, filepath)
             
             return {
-                'status': 'success',
-                'filename': filename,
-                'products_count': len(products)
+                'status': 'completed',
+                'category': category,
+                'file': filename,
+                'count': len(products)
             }
-            
-        else:
-            update_progress(job_id, 0, 0, 0, "failed")
-            return {
-                'status': 'error',
-                'message': 'No products found'
-            }
-            
-    except Exception as e:
-        logger.error(f"Scraping error: {str(e)}")
-        update_progress(job_id, 0, 0, 0, f"error: {str(e)}")
+        
         return {
-            'status': 'error',
-            'message': str(e)
+            'status': 'completed',
+            'category': category,
+            'error': 'No products found',
+            'count': 0
         }
 
-def get_job_progress(job_id):
-    """Get progress of a specific job"""
-    progress = redis_client.get(f'scrape_progress:{job_id}')
-    if progress:
-        return json.loads(progress)
-    return None
+    except Exception as e:
+        logger.error(f"Category processing failed: {str(e)}", exc_info=True)
+        raise
+
+@celery.task
+def cleanup_old_files():
+    """
+    Periodic task to clean up old export files
+    """
+    try:
+        # Keep files for 24 hours
+        cutoff = datetime.now().timestamp() - (24 * 60 * 60)
+        
+        for filename in os.listdir(UPLOAD_FOLDER):
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            if os.path.getctime(filepath) < cutoff:
+                os.remove(filepath)
+                logger.info(f"Removed old file: {filename}")
+                
+    except Exception as e:
+        logger.error(f"Cleanup failed: {str(e)}", exc_info=True)
+        raise
+
+# Schedule periodic tasks
+@celery.on_after_configure.connect
+def setup_periodic_tasks(sender, **kwargs):
+    # Run cleanup every 12 hours
+    sender.add_periodic_task(
+        60 * 60 * 12,  # 12 hours
+        cleanup_old_files.s(),
+        name='cleanup-old-files'
+    )
