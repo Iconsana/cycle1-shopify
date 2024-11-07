@@ -1,3 +1,4 @@
+# app/scraper.py
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -7,12 +8,43 @@ import time
 import logging
 from typing import Optional, List, Dict
 
-# Set up logging with more detail
+# Set up logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for more detail
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+def clean_price(price_str: str) -> float:
+    """Clean price string and convert to float."""
+    try:
+        price_str = price_str.replace('EXCL. VAT', '').replace('R', '').strip()
+        price_str = re.sub(r'[^\d.,]', '', price_str).replace(',', '.')
+        return float(price_str)
+    except ValueError as e:
+        logger.error(f"Error converting price: {e}")
+        return 0.0
+
+def clean_title(title_text: str) -> str:
+    """Clean the product title."""
+    try:
+        title = re.sub(r'In Stock.*?(?=[A-Z0-9])', '', title_text, flags=re.DOTALL)
+        title = re.sub(r'List Price.*', '', title, flags=re.DOTALL)
+        title = re.sub(r'LIGHTING|INSTALLATION & WIRING ACCESSORIES.*?(?=[A-Z0-9])', '', title, flags=re.DOTALL)
+        return ' '.join(title.split()).strip()
+    except Exception as e:
+        logger.error(f"Error cleaning title: {e}")
+        return title_text
+
+def create_clean_description(product_code: str, title: str) -> str:
+    """Create a clean HTML description."""
+    return f"""
+    <div class="product-description">
+        <p>Product Code: {product_code}</p>
+        <p>{title}</p>
+        <p>Imported from ACDC Dynamics</p>
+    </div>
+    """
 
 def extract_product_code(product_element):
     """Extract product code with enhanced debugging."""
@@ -181,4 +213,26 @@ def scrape_acdc_products(start_page: int = 1, end_page: Optional[int] = None, ma
     logger.info(f"Scraping completed. Total products scraped: {len(products)}")
     return products
 
-# Keep other functions (clean_price, clean_title, etc.) as they were...
+def save_to_csv(products: List[Dict], filename: Optional[str] = None) -> str:
+    """Save products to CSV file."""
+    if not filename:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'acdc_products_{timestamp}.csv'
+    
+    df = pd.DataFrame(products)
+    df.to_csv(filename, index=False)
+    logger.info(f"Saved {len(products)} products to {filename}")
+    return filename
+
+if __name__ == "__main__":
+    try:
+        products = scrape_acdc_products(start_page=1, end_page=5)  # Test with first 5 pages
+        if products:
+            filename = save_to_csv(products)
+            print(f"Products saved to {filename}")
+        else:
+            print("No products were scraped")
+    except KeyboardInterrupt:
+        print("\nScraping interrupted by user")
+    except Exception as e:
+        print(f"Scraping failed: {e}")
