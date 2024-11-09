@@ -1,20 +1,10 @@
-# app/main.py
-from flask import (
-    request, 
-    jsonify, 
-    send_file, 
-    render_template,
-    url_for,
-    abort
-)
-from celery.result import AsyncResult
+from cycle1-shopify.app import app
+from flask import request, jsonify, send_file
 import pandas as pd
 from datetime import datetime
 import os
-
-from app import app
-from app.tasks import scrape_products_task, process_category_task
-from app.config import UPLOAD_FOLDER
+from cycle1-shopify.app.scraper import scrape_acdc_products
+from cycle1-shopify.app.tasks import scrape_products_task
 
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
