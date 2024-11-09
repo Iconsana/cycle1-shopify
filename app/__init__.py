@@ -32,10 +32,10 @@ app.config.update(
 
 # Initialize Celery
 celery = Celery(
-    'app',
+    'cycle1-shopify.app',  # Updated to full path
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=['app.tasks']
+    include=['cycle1-shopify.app.tasks']  # Updated to full path
 )
 
 # Celery configuration
@@ -49,13 +49,6 @@ celery.conf.update(
 logger.debug("Celery initialized")
 
 # Import routes after app initialization
-from app import main
+from cycle1-shopify.app import main  # Updated to full path
 logger.debug("Routes imported")
-logger.info("Application initialization completed")
-
-# Import routes after app initialization to avoid circular imports
-logger.debug("Importing routes...")
-from app import main
-logger.debug("Routes imported")
-
 logger.info("Application initialization completed")
