@@ -1,16 +1,10 @@
-# app/tasks.py
-from app import celery
-from app.scraper import scrape_acdc_products, save_to_csv
+from cycle1-shopify.app import celery
+from cycle1-shopify.app.scraper import scrape_acdc_products, save_to_csv
 from celery.utils.log import get_task_logger
 import os
 from datetime import datetime
-import json
-from app.config import (
-    UPLOAD_FOLDER,
-    MAX_PAGES,
-    MARKUP_PERCENTAGE
-)
 
+# ... rest of your tasks.py code stays the same ...
 # Configure logger for tasks
 logger = get_task_logger(__name__)
 
