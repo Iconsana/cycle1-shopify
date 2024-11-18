@@ -1,27 +1,31 @@
-# main.py
-from flask import Flask, request, redirect, jsonify, send_file
+from flask import Flask, request, redirect, jsonify, send_file, render_template
 import pandas as pd
 from datetime import datetime
 import os
-from scraper import scrape_acdc_products
+from scraper import scrape_acdc_products, save_to_csv
 
 app = Flask(__name__)
 
 def generate_csv():
-    """Generate CSV from scraped products"""
-    products = scrape_acdc_products()
-    if products:
-        # Create DataFrame
-        df = pd.DataFrame(products)
+    """Generate CSV from scraped products with page range"""
+    try:
+        start_page = int(request.form.get('start_page', 1))
+        end_page = int(request.form.get('end_page', 50))
         
-        # Add timestamp to filename
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'acdc_products_{timestamp}.csv'
-        
-        # Save to CSV
-        df.to_csv(filename, index=False)
-        return filename
-    return None
+        # Validate page ranges
+        if start_page < 1 or end_page > 4331:
+            raise ValueError("Invalid page range")
+        if start_page > end_page:
+            raise ValueError("Start page must be less than end page")
+            
+        products = scrape_acdc_products(start_page=start_page, end_page=end_page)
+        if products:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv'
+            return save_to_csv(products, filename)
+    except Exception as e:
+        print(f"Error generating CSV: {e}")
+        return None
 
 @app.route('/download-csv', methods=['GET'])
 def download_csv():
@@ -46,9 +50,11 @@ def sync_products():
         filename = generate_csv()
         if filename:
             download_url = f"https://{request.host}/download-csv"
+            start_page = request.form.get('start_page', 1)
+            end_page = request.form.get('end_page', 50)
             return jsonify({
                 'success': True,
-                'message': f'Successfully scraped products. Click the link below to download:',
+                'message': f'Successfully scraped pages {start_page} to {end_page}. Click below to download:',
                 'download_url': download_url,
                 'filename': filename
             })
@@ -66,14 +72,30 @@ def sync_products():
 def index():
     return """
     <h1>ACDC Product Scraper</h1>
-    <p>Use the buttons below to:</p>
+    <p>Total available pages: 4331</p>
+    <p>Recommended: Scrape 50 pages at a time</p>
+    
     <form action="/sync" method="post">
-        <button type="submit">Scrape Products</button>
+        <div style="margin-bottom: 15px;">
+            <label for="start_page">Start Page:</label>
+            <input type="number" id="start_page" name="start_page" 
+                   value="1" min="1" max="4331" required>
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <label for="end_page">End Page:</label>
+            <input type="number" id="end_page" name="end_page" 
+                   value="50" min="1" max="4331" required>
+        </div>
+        
+        <button type="submit" style="padding: 10px 20px;">Start Scraping</button>
     </form>
-    <br>
-    <a href="/download-csv">
-        <button>Download Latest CSV</button>
-    </a>
+    
+    <div style="margin-top: 20px;">
+        <a href="/download-csv">
+            <button style="padding: 10px 20px;">Download Latest CSV</button>
+        </a>
+    </div>
     """
 
 if __name__ == '__main__':
