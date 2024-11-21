@@ -19,7 +19,6 @@ def generate_csv():
         products = scrape_acdc_products(start_page=start_page, end_page=end_page)
         if products:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            # Use absolute path in the tmp directory
             filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
             return save_to_csv(products, filename)
     except Exception as e:
@@ -35,12 +34,16 @@ def download_csv():
             
         file_path = os.path.join('/tmp', os.path.basename(filename))
         if os.path.exists(file_path):
-            return send_file(
+            response = send_file(
                 file_path,
                 mimetype='text/csv',
                 as_attachment=True,
                 download_name=os.path.basename(filename)
             )
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
         return "File not found", 404
     except Exception as e:
         return str(e), 500
@@ -50,13 +53,12 @@ def sync_products():
     try:
         filename = generate_csv()
         if filename:
-            # Pass the filename as a query parameter
-            download_url = f"/download-csv?file={os.path.basename(filename)}"
+            base_filename = os.path.basename(filename)
             return jsonify({
                 'success': True,
-                'message': f'Successfully scraped products. Click below to download:',
-                'download_url': download_url,
-                'filename': os.path.basename(filename)
+                'message': 'Successfully scraped products. Download will start automatically.',
+                'download_url': f'/download-csv?file={base_filename}',
+                'filename': base_filename
             })
         return jsonify({
             'success': False,
@@ -75,7 +77,7 @@ def index():
     <p>Total available pages: 4331</p>
     <p>Recommended: Scrape 50 pages at a time</p>
     
-    <form action="/sync" method="post">
+    <form id="scrapeForm" action="/sync" method="post">
         <div style="margin-bottom: 15px;">
             <label for="start_page">Start Page:</label>
             <input type="number" id="start_page" name="start_page" 
@@ -90,6 +92,35 @@ def index():
         
         <button type="submit" style="padding: 10px 20px;">Start Scraping</button>
     </form>
+    
+    <div id="status" style="margin-top: 20px;"></div>
+    
+    <script>
+        document.getElementById('scrapeForm').onsubmit = function(e) {
+            e.preventDefault();
+            
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = 'Scraping in progress...';
+            
+            fetch('/sync', {
+                method: 'POST',
+                body: new FormData(e.target)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    statusDiv.innerHTML = data.message;
+                    // Trigger download
+                    window.location.href = data.download_url;
+                } else {
+                    statusDiv.innerHTML = 'Error: ' + data.message;
+                }
+            })
+            .catch(error => {
+                statusDiv.innerHTML = 'Error: ' + error.message;
+            });
+        };
+    </script>
     """
 
 if __name__ == '__main__':
