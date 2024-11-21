@@ -1,4 +1,3 @@
-
 from flask import Flask, request, redirect, jsonify, send_file, render_template
 import pandas as pd
 from datetime import datetime
@@ -8,12 +7,10 @@ from scraper import scrape_acdc_products, save_to_csv
 app = Flask(__name__)
 
 def generate_csv():
-    """Generate CSV from scraped products with page range"""
     try:
         start_page = int(request.form.get('start_page', 1))
         end_page = int(request.form.get('end_page', 50))
         
-        # Validate page ranges
         if start_page < 1 or end_page > 4331:
             raise ValueError("Invalid page range")
         if start_page > end_page:
@@ -22,7 +19,8 @@ def generate_csv():
         products = scrape_acdc_products(start_page=start_page, end_page=end_page)
         if products:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv'
+            # Use absolute path in the tmp directory
+            filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
             return save_to_csv(products, filename)
     except Exception as e:
         print(f"Error generating CSV: {e}")
@@ -30,34 +28,35 @@ def generate_csv():
 
 @app.route('/download-csv', methods=['GET'])
 def download_csv():
-    """Endpoint to download the latest product data as CSV"""
     try:
-        filename = generate_csv()
-        if filename:
+        filename = request.args.get('file')
+        if not filename:
+            return "No filename specified", 400
+            
+        file_path = os.path.join('/tmp', os.path.basename(filename))
+        if os.path.exists(file_path):
             return send_file(
-                filename,
+                file_path,
                 mimetype='text/csv',
                 as_attachment=True,
-                download_name=filename
+                download_name=os.path.basename(filename)
             )
-        return "No products found", 404
+        return "File not found", 404
     except Exception as e:
         return str(e), 500
 
 @app.route('/sync', methods=['POST'])
 def sync_products():
-    """Generate CSV and return download link"""
     try:
         filename = generate_csv()
         if filename:
-            download_url = f"https://{request.host}/download-csv"
-            start_page = request.form.get('start_page', 1)
-            end_page = request.form.get('end_page', 50)
+            # Pass the filename as a query parameter
+            download_url = f"/download-csv?file={os.path.basename(filename)}"
             return jsonify({
                 'success': True,
-                'message': f'Successfully scraped pages {start_page} to {end_page}. Click below to download:',
+                'message': f'Successfully scraped products. Click below to download:',
                 'download_url': download_url,
-                'filename': filename
+                'filename': os.path.basename(filename)
             })
         return jsonify({
             'success': False,
@@ -91,12 +90,6 @@ def index():
         
         <button type="submit" style="padding: 10px 20px;">Start Scraping</button>
     </form>
-    
-    <div style="margin-top: 20px;">
-        <a href="/download-csv">
-            <button style="padding: 10px 20px;">Download Latest CSV</button>
-        </a>
-    </div>
     """
 
 if __name__ == '__main__':
