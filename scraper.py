@@ -1,3 +1,60 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from datetime import datetime
+import re
+import time
+
+def clean_price(price_str):
+    """Clean price string and convert to float."""
+    try:
+        # Remove currency symbol and text
+        price_str = price_str.replace('EXCL. VAT', '').replace('R', '').strip()
+        # Keep only numbers, dots, and commas
+        price_str = re.sub(r'[^\d.,]', '', price_str).replace(',', '.')
+        return float(price_str)
+    except (ValueError, AttributeError) as e:
+        print(f"Error converting price: {e}")
+        return 0.0
+
+def extract_product_code(product_element):
+    """Extract product code from the product."""
+    try:
+        description = product_element.find('div', class_='product-description')
+        if description:
+            text_content = description.get_text()
+            product_code_match = re.search(r'[A-Z0-9-]+(?=\s*(?:List Price|$))', text_content)
+            if product_code_match:
+                return product_code_match.group().strip()
+    except Exception as e:
+        print(f"Error extracting product code: {e}")
+    return None
+
+def clean_title(title_text):
+    """Clean the product title."""
+    try:
+        # Remove stock information
+        title = re.sub(r'In Stock.*?(?=[A-Z0-9])', '', title_text, flags=re.DOTALL)
+        # Remove price information
+        title = re.sub(r'List Price.*', '', title, flags=re.DOTALL)
+        # Remove category information
+        title = re.sub(r'LIGHTING|INSTALLATION & WIRING ACCESSORIES.*?(?=[A-Z0-9])', '', title, flags=re.DOTALL)
+        # Clean up whitespace
+        return ' '.join(title.split()).strip()
+    except Exception as e:
+        print(f"Error cleaning title: {e}")
+        return title_text
+
+def create_clean_description(product_code, title):
+    """Create a clean HTML description."""
+    return f"""
+    <div class="product-description">
+        <p>Product Code: {product_code}</p>
+        <p>{title}</p>
+        <p>Imported from ACDC Dynamics</p>
+    </div>
+    """
+
 def scrape_acdc_products(start_page=1, end_page=50):
     """Scrape products from ACDC website with page range support."""
     base_url = 'https://acdc.co.za/2-home'
@@ -35,19 +92,18 @@ def scrape_acdc_products(start_page=1, end_page=50):
                     raw_title = title_element.get_text(strip=True) if title_element else ""
                     clean_product_title = clean_title(raw_title)
                     
-                    # Updated price handling
-                    price_span = product.find('span', class_='product-price')
-                    price_text = price_span.get_text(strip=True) if price_span else "0"
-                    original_price = clean_price(price_text)
-                    marked_up_price = round(original_price * 1.1, 2) if original_price > 0 else 0.0
+                    # Try to get price information
+                    price_span = product.find('span', class_='price')
+                    original_price = 0.0
+                    if price_span:
+                        original_price = clean_price(price_span.get_text(strip=True))
+                    else:
+                        # Try alternate price class
+                        price_span = product.find('span', class_='product-price')
+                        if price_span:
+                            original_price = clean_price(price_span.get_text(strip=True))
                     
-                    # Additional price check - look for regular price if available
-                    regular_price_span = product.find('span', class_='regular-price')
-                    if regular_price_span:
-                        regular_price = clean_price(regular_price_span.get_text(strip=True))
-                        if regular_price > 0:
-                            original_price = regular_price
-                            marked_up_price = round(original_price * 1.1, 2)
+                    marked_up_price = round(original_price * 1.1, 2) if original_price > 0 else 0.0
                     
                     product_data = {
                         'Handle': product_code.lower(),
@@ -73,10 +129,7 @@ def scrape_acdc_products(start_page=1, end_page=50):
                         'Status': 'active'
                     }
                     
-                    # Print prices for debugging
-                    print(f"Scraped: {product_code} - {clean_product_title}")
-                    print(f"Price: Original={original_price}, Marked Up={marked_up_price}")
-                    
+                    print(f"Scraped: {product_code} - {clean_product_title} (Price: R{original_price})")
                     products.append(product_data)
                     page_products += 1
                     
@@ -100,3 +153,17 @@ def scrape_acdc_products(start_page=1, end_page=50):
     print(f"Total pages scraped: {total_pages_scraped}")
     print(f"Total products scraped: {len(products)}")
     return products
+
+def save_to_csv(products, filename=None):
+    """Save products to CSV file."""
+    if not filename:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'acdc_products_{timestamp}.csv'
+    
+    df = pd.DataFrame(products)
+    df.to_csv(filename, index=False)
+    print(f"Saved {len(products)} products to {filename}")
+    return filename
+
+# Make sure these are available for import
+__all__ = ['scrape_acdc_products', 'save_to_csv']
