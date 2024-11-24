@@ -5,12 +5,9 @@ python-dotenv==1.0.0
 pandas==1.5.3
 numpy==1.23.5
 gunicorn==20.1.0
-shopify==12.1.0
+ShopifyAPI==11.0.0  # Changed from 12.1.0 to a compatible version
 flask-socketio==5.3.6
 eventlet==0.33.3
-# Core web framework and server
-flask==2.3.3
-gunicorn==20.1.0
 
 
 # Shopify integration
