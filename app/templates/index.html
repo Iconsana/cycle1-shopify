@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACDC Product Sync</title>
+    <!-- Shopify Polaris -->
+    <link rel="stylesheet" href="https://unpkg.com/@shopify/polaris@12.0.0/build/esm/styles.css"/>
+    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+    <style>
+        .sync-container {
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress {
+            width: 0%;
+            height: 100%;
+            background-color: #008060;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="sync-container">
+        <h1>ACDC Product Sync</h1>
+        
+        <div class="form-section">
+            <h2>Sync Settings</h2>
+            <form id="syncForm">
+                <div>
+                    <label for="startPage">Start Page:</label>
+                    <input type="number" id="startPage" name="start_page" min="1" max="4331" value="1">
+                </div>
+                <div>
+                    <label for="endPage">End Page:</label>
+                    <input type="number" id="endPage" name="end_page" min="1" max="4331" value="30">
+                </div>
+                <button type="submit">Start Sync</button>
+            </form>
+        </div>
+
+        <div class="progress-section" style="display: none;">
+            <h2>Sync Progress</h2>
+            <div class="progress-bar">
+                <div class="progress" id="progressBar"></div>
+            </div>
+            <p id="statusMessage">Preparing sync...</p>
+            <p id="productCount">Products synced: 0</p>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('syncForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const formData = new FormData(form);
+            
+            // Show progress section
+            document.querySelector('.progress-section').style.display = 'block';
+            
+            try {
+                const response = await fetch('/sync', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('statusMessage').textContent = data.message;
+                } else {
+                    document.getElementById('statusMessage').textContent = 'Error: ' + data.message;
+                }
+            } catch (error) {
+                document.getElementById('statusMessage').textContent = 'Error: ' + error.message;
+            }
+        });
+    </script>
+</body>
+</html>
