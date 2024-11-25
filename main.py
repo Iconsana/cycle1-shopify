@@ -15,13 +15,38 @@ shopify.Session.setup(
     secret=os.environ.get('SHOPIFY_API_SECRET')
 )
 
+def generate_csv():
+    """Generate CSV from scraped products with page range"""
+    try:
+        start_page = int(request.form.get('start_page', 1))
+        end_page = int(request.form.get('end_page', 50))
+        
+        if start_page < 1 or end_page > 4331:
+            raise ValueError("Invalid page range")
+        if start_page > end_page:
+            raise ValueError("Start page must be less than end page")
+            
+        products = scrape_acdc_products(start_page=start_page, end_page=end_page)
+        if products:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
+            return save_to_csv(products, filename)
+    except Exception as e:
+        print(f"Error generating CSV: {e}")
+        return None
+
 def init_shopify_session():
     """Initialize Shopify API session"""
-    shop_url = f"{os.environ.get('SHOP_NAME')}.myshopify.com"
-    access_token = os.environ.get('ACCESS_TOKEN')
-    
-    session = shopify.Session(shop_url, '2023-10', access_token)
-    shopify.ShopifyResource.activate_session(session)
+    try:
+        shop_url = f"{os.environ.get('SHOP_NAME')}.myshopify.com"
+        access_token = os.environ.get('ACCESS_TOKEN')
+        
+        session = shopify.Session(shop_url, '2023-10', access_token)
+        shopify.ShopifyResource.activate_session(session)
+        return True
+    except Exception as e:
+        print(f"Error initializing Shopify session: {e}")
+        return False
 
 def upload_to_shopify(products):
     """Upload products to Shopify"""
@@ -31,9 +56,11 @@ def upload_to_shopify(products):
         'errors': []
     }
     
+    if not init_shopify_session():
+        results['errors'].append("Failed to initialize Shopify session")
+        return results
+
     try:
-        init_shopify_session()
-        
         for product in products:
             try:
                 new_product = shopify.Product()
@@ -43,7 +70,6 @@ def upload_to_shopify(products):
                 new_product.product_type = product['Type']
                 new_product.tags = product['Tags']
                 
-                # Create variant
                 variant = shopify.Variant({
                     'price': product['Variant Price'],
                     'compare_at_price': product['Variant Compare At Price'],
@@ -62,78 +88,89 @@ def upload_to_shopify(products):
                     results['failed'] += 1
                     results['errors'].append(f"Failed to save {product['Title']}")
                 
+                # Rate limiting
+                if results['uploaded'] % 2 == 0:
+                    time.sleep(1)
+                    
             except Exception as e:
                 results['failed'] += 1
                 results['errors'].append(f"Error with {product['Title']}: {str(e)}")
                 
-            # Rate limiting - sleep every 2 products
-            if results['uploaded'] % 2 == 0:
-                time.sleep(1)
-                
     except Exception as e:
         results['errors'].append(f"Global error: {str(e)}")
     finally:
-        shopify.ShopifyResource.clear_session()
+        try:
+            shopify.ShopifyResource.clear_session()
+        except:
+            pass
     
     return results
 
+@app.route('/download-csv', methods=['GET'])
+def download_csv():
+    """Endpoint to download the latest product data as CSV"""
+    try:
+        filename = request.args.get('file')
+        if not filename:
+            return "No filename specified", 400
+            
+        file_path = os.path.join('/tmp', os.path.basename(filename))
+        if os.path.exists(file_path):
+            response = send_file(
+                file_path,
+                mimetype='text/csv',
+                as_attachment=True,
+                download_name=os.path.basename(filename)
+            )
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+        return "File not found", 404
+    except Exception as e:
+        return str(e), 500
+
 @app.route('/sync', methods=['POST'])
 def sync_products():
-    """Generate CSV and upload to Shopify"""
+    """Generate CSV and optionally upload to Shopify"""
     try:
-        start_page = int(request.form.get('start_page', 1))
-        end_page = int(request.form.get('end_page', 50))
-        
-        # Validate page ranges
-        if start_page < 1 or end_page > 4331:
-            raise ValueError("Invalid page range")
-        if start_page > end_page:
-            raise ValueError("Start page must be less than end page")
-        
-        # Scrape products
-        products = scrape_acdc_products(start_page=start_page, end_page=end_page)
-        
-        if not products:
+        # First generate CSV
+        filename = generate_csv()
+        if not filename:
             return jsonify({
                 'success': False,
                 'message': 'No products found to sync'
             })
-        
-        # Save CSV as backup
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
-        save_to_csv(products, filename)
-        
-        # Upload to Shopify
-        upload_results = upload_to_shopify(products)
-        
-        return jsonify({
-            'success': True,
-            'message': f'Sync completed. {upload_results["uploaded"]} products uploaded to Shopify, {upload_results["failed"]} failed.',
-            'details': {
-                'total_processed': len(products),
-                'uploaded_to_shopify': upload_results['uploaded'],
-                'failed_uploads': upload_results['failed'],
-                'errors': upload_results['errors'][:5] if upload_results['errors'] else []
-            },
-            'download_url': f'/download-csv?file={os.path.basename(filename)}',
-            'filename': os.path.basename(filename)
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
 
-# [Rest of your existing code remains the same...]
-
-@app.route('/sync', methods=['POST'])
-def sync_products():
-    """Generate CSV and handle sync"""
-    try:
-        filename = generate_csv()
-        if filename:
+        # If we have Shopify credentials, try to upload
+        if all([
+            os.environ.get('SHOPIFY_API_KEY'),
+            os.environ.get('SHOPIFY_API_SECRET'),
+            os.environ.get('SHOP_NAME'),
+            os.environ.get('ACCESS_TOKEN')
+        ]):
+            # Read products from CSV
+            df = pd.read_csv(filename)
+            products = df.to_dict('records')
+            
+            # Upload to Shopify
+            upload_results = upload_to_shopify(products)
+            
+            base_filename = os.path.basename(filename)
+            return jsonify({
+                'success': True,
+                'message': f'Sync completed. {upload_results["uploaded"]} products uploaded to Shopify, {upload_results["failed"]} failed.',
+                'details': {
+                    'total_processed': len(products),
+                    'uploaded_to_shopify': upload_results['uploaded'],
+                    'failed_uploads': upload_results['failed'],
+                    'errors': upload_results['errors'][:5] if upload_results['errors'] else []
+                },
+                'download_url': f'/download-csv?file={base_filename}',
+                'filename': base_filename
+            })
+        else:
+            # If no Shopify credentials, just return CSV download
             base_filename = os.path.basename(filename)
             return jsonify({
                 'success': True,
@@ -141,10 +178,7 @@ def sync_products():
                 'download_url': f'/download-csv?file={base_filename}',
                 'filename': base_filename
             })
-        return jsonify({
-            'success': False,
-            'message': 'No products found to sync'
-        })
+            
     except Exception as e:
         return jsonify({
             'success': False,
@@ -200,12 +234,10 @@ def index():
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 
-                // Try to parse JSON response
                 let data;
                 try {
                     data = await response.json();
                 } catch (parseError) {
-                    // If JSON parsing fails, show raw response text
                     const rawText = await response.text();
                     throw new Error(`Failed to parse response: ${rawText}`);
                 }
@@ -213,7 +245,23 @@ def index():
                 if (data.success) {
                     statusDiv.textContent = data.message;
                     
-                    // Handle file download
+                    // Show additional details if available
+                    if (data.details) {
+                        const details = data.details;
+                        statusDiv.innerHTML += `<br><br>Products processed: ${details.total_processed}`;
+                        if (details.uploaded_to_shopify !== undefined) {
+                            statusDiv.innerHTML += `<br>Uploaded to Shopify: ${details.uploaded_to_shopify}`;
+                            statusDiv.innerHTML += `<br>Failed uploads: ${details.failed_uploads}`;
+                            
+                            if (details.errors && details.errors.length > 0) {
+                                statusDiv.innerHTML += '<br><br>Recent errors:';
+                                details.errors.forEach(error => {
+                                    statusDiv.innerHTML += `<br>- ${error}`;
+                                });
+                            }
+                        }
+                    }
+                    
                     if (data.download_url) {
                         window.location.href = data.download_url;
                     }
@@ -273,32 +321,6 @@ def index():
         
         button:hover {
             background-color: #45a049;
-        }
-
-        .progress-container {
-            width: 100%;
-            background-color: #f1f1f1;
-            padding: 3px;
-            border-radius: 3px;
-            box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
-            margin-top: 10px;
-            display: none;
-        }
-
-        .progress-bar {
-            display: flex;
-            height: 20px;
-            background-color: #4CAF50;
-            border-radius: 3px;
-            transition: width 500ms ease-in-out;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            width: 0%;
-        }
-
-        .progress-container.active {
-            display: block;
         }
     </style>
     """
