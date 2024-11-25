@@ -3,12 +3,83 @@ import pandas as pd
 from datetime import datetime
 import os
 from scraper import scrape_acdc_products, save_to_csv
+import shopify
+import time
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY')
 
-def generate_csv():
-    """Generate CSV from scraped products with page range"""
+# Initialize Shopify
+shopify.Session.setup(
+    api_key=os.environ.get('SHOPIFY_API_KEY'),
+    secret=os.environ.get('SHOPIFY_API_SECRET')
+)
+
+def init_shopify_session():
+    """Initialize Shopify API session"""
+    shop_url = f"{os.environ.get('SHOP_NAME')}.myshopify.com"
+    access_token = os.environ.get('ACCESS_TOKEN')
+    
+    session = shopify.Session(shop_url, '2023-10', access_token)
+    shopify.ShopifyResource.activate_session(session)
+
+def upload_to_shopify(products):
+    """Upload products to Shopify"""
+    results = {
+        'uploaded': 0,
+        'failed': 0,
+        'errors': []
+    }
+    
+    try:
+        init_shopify_session()
+        
+        for product in products:
+            try:
+                new_product = shopify.Product()
+                new_product.title = product['Title']
+                new_product.body_html = product['Body (HTML)']
+                new_product.vendor = product['Vendor']
+                new_product.product_type = product['Type']
+                new_product.tags = product['Tags']
+                
+                # Create variant
+                variant = shopify.Variant({
+                    'price': product['Variant Price'],
+                    'compare_at_price': product['Variant Compare At Price'],
+                    'sku': product['Variant SKU'],
+                    'inventory_management': 'shopify',
+                    'inventory_quantity': int(product['Variant Inventory Qty']),
+                    'requires_shipping': product['Variant Requires Shipping'] == 'TRUE',
+                    'taxable': product['Variant Taxable'] == 'TRUE'
+                })
+                
+                new_product.variants = [variant]
+                
+                if new_product.save():
+                    results['uploaded'] += 1
+                else:
+                    results['failed'] += 1
+                    results['errors'].append(f"Failed to save {product['Title']}")
+                
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append(f"Error with {product['Title']}: {str(e)}")
+                
+            # Rate limiting - sleep every 2 products
+            if results['uploaded'] % 2 == 0:
+                time.sleep(1)
+                
+    except Exception as e:
+        results['errors'].append(f"Global error: {str(e)}")
+    finally:
+        shopify.ShopifyResource.clear_session()
+    
+    return results
+
+@app.route('/sync', methods=['POST'])
+def sync_products():
+    """Generate CSV and upload to Shopify"""
     try:
         start_page = int(request.form.get('start_page', 1))
         end_page = int(request.form.get('end_page', 50))
@@ -18,39 +89,44 @@ def generate_csv():
             raise ValueError("Invalid page range")
         if start_page > end_page:
             raise ValueError("Start page must be less than end page")
-            
+        
+        # Scrape products
         products = scrape_acdc_products(start_page=start_page, end_page=end_page)
-        if products:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
-            return save_to_csv(products, filename)
+        
+        if not products:
+            return jsonify({
+                'success': False,
+                'message': 'No products found to sync'
+            })
+        
+        # Save CSV as backup
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
+        save_to_csv(products, filename)
+        
+        # Upload to Shopify
+        upload_results = upload_to_shopify(products)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Sync completed. {upload_results["uploaded"]} products uploaded to Shopify, {upload_results["failed"]} failed.',
+            'details': {
+                'total_processed': len(products),
+                'uploaded_to_shopify': upload_results['uploaded'],
+                'failed_uploads': upload_results['failed'],
+                'errors': upload_results['errors'][:5] if upload_results['errors'] else []
+            },
+            'download_url': f'/download-csv?file={os.path.basename(filename)}',
+            'filename': os.path.basename(filename)
+        })
+        
     except Exception as e:
-        print(f"Error generating CSV: {e}")
-        return None
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
 
-@app.route('/download-csv', methods=['GET'])
-def download_csv():
-    """Endpoint to download the latest product data as CSV"""
-    try:
-        filename = request.args.get('file')
-        if not filename:
-            return "No filename specified", 400
-            
-        file_path = os.path.join('/tmp', os.path.basename(filename))
-        if os.path.exists(file_path):
-            response = send_file(
-                file_path,
-                mimetype='text/csv',
-                as_attachment=True,
-                download_name=os.path.basename(filename)
-            )
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-            return response
-        return "File not found", 404
-    except Exception as e:
-        return str(e), 500
+# [Rest of your existing code remains the same...]
 
 @app.route('/sync', methods=['POST'])
 def sync_products():
