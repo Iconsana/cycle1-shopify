@@ -44,7 +44,7 @@ def generate_csv():
             raise ValueError("Start page must be less than end page")
             
         emit_progress("Starting product scraping...", 0, end_page - start_page + 1)
-        products = scrape_acdc_products(start_page=start_page, end_page=end_page, progress_callback=emit_progress)
+        products = scrape_acdc_products(start_page=start_page, end_page=end_page)
         
         if products:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -146,7 +146,6 @@ def upload_to_shopify(products):
             pass
     
     return results
-
 @app.route('/download-csv', methods=['GET'])
 def download_csv():
     """Endpoint to download the latest product data as CSV"""
@@ -228,7 +227,7 @@ def sync_products():
 
 @app.route('/')
 def index():
-    return """
+    return '''
     <!DOCTYPE html>
     <html>
     <head>
@@ -288,13 +287,6 @@ def index():
             .log-error { background-color: #f2dede; }
             .log-info { background-color: #d9edf7; }
             
-            input[type="number"] {
-                padding: 5px;
-                margin: 5px;
-                border-radius: 3px;
-                border: 1px solid #ddd;
-            }
-            
             button {
                 background-color: #4CAF50;
                 color: white;
@@ -302,7 +294,6 @@ def index():
                 border: none;
                 border-radius: 4px;
                 cursor: pointer;
-                margin-top: 10px;
             }
             
             button:disabled {
@@ -310,13 +301,9 @@ def index():
                 cursor: not-allowed;
             }
             
-            .form-group {
-                margin-bottom: 15px;
-            }
-            
-            label {
-                display: inline-block;
-                width: 100px;
+            input[type="number"] {
+                padding: 5px;
+                margin-left: 10px;
             }
         </style>
     </head>
@@ -326,13 +313,13 @@ def index():
         <p>Recommended: Scrape 50 pages at a time</p>
         
         <form id="scrapeForm">
-            <div class="form-group">
+            <div style="margin-bottom: 15px;">
                 <label for="start_page">Start Page:</label>
                 <input type="number" id="start_page" name="start_page" 
                        value="1" min="1" max="4331" required>
             </div>
             
-            <div class="form-group">
+            <div style="margin-bottom: 15px;">
                 <label for="end_page">End Page:</label>
                 <input type="number" id="end_page" name="end_page" 
                        value="50" min="1" max="4331" required>
@@ -351,27 +338,27 @@ def index():
 
         <script>
             const socket = io();
-            const progressBar = document.getElementById('progressBar');
-            const progressText = document.getElementById('progressText');
-            const progressContainer = document.getElementById('progressContainer');
-            const logContainer = document.getElementById('logContainer');
-            const submitBtn = document.getElementById('submitBtn');
+            const progressBar = document.getElementById("progressBar");
+            const progressText = document.getElementById("progressText");
+            const progressContainer = document.getElementById("progressContainer");
+            const logContainer = document.getElementById("logContainer");
+            const submitBtn = document.getElementById("submitBtn");
             
-            function addLogEntry(message, type = 'info') {
-                const entry = document.createElement('div');
+            function addLogEntry(message, type = "info") {
+                const entry = document.createElement("div");
                 entry.className = `log-entry log-${type}`;
                 entry.textContent = message;
                 logContainer.insertBefore(entry, logContainer.firstChild);
             }
             
-            socket.on('connect', () => {
-                console.log('Connected to server');
+            socket.on("connect", () => {
+                console.log("Connected to server");
             });
             
-            socket.on('sync_progress', function(data) {
-                progressContainer.style.display = 'block';
-                progressBar.style.width = data.percentage + '%';
-                progressText.textContent = data.percentage + '%';
+            socket.on("sync_progress", function(data) {
+                progressContainer.style.display = "block";
+                progressBar.style.width = data.percentage + "%";
+                progressText.textContent = data.percentage + "%";
                 
                 addLogEntry(data.message, data.status);
                 
@@ -380,45 +367,44 @@ def index():
                 }
             });
             
-            document.getElementById('scrapeForm').onsubmit = async function(e) {
+            document.getElementById("scrapeForm").onsubmit = async function(e) {
                 e.preventDefault();
                 
-                // Clear previous logs and reset progress
-                logContainer.innerHTML = '';
-                progressBar.style.width = '0%';
-                progressText.textContent = '0%';
-                progressContainer.style.display = 'block';
+                logContainer.innerHTML = "";
+                progressBar.style.width = "0%";
+                progressText.textContent = "0%";
+                progressContainer.style.display = "block";
                 submitBtn.disabled = true;
                 
-                addLogEntry('Starting sync process...', 'info');
+                addLogEntry("Starting sync process...", "info");
                 
                 try {
                     const formData = new FormData(e.target);
-                    const response = await fetch('/sync', {
-                        method: 'POST',
+                    const response = await fetch("/sync", {
+                        method: "POST",
                         body: formData
                     });
                     
                     const data = await response.json();
                     
                     if (data.success) {
-                        addLogEntry(data.message, 'success');
-                        if (data.details) {
-                            addLogEntry(`Total processed: ${data.details.total_processed}`, 'info');
-                            if (data.details.uploaded_to_shopify !== undefined) {
-                                addLogEntry(`Uploaded to Shopify: ${data.details.uploaded_to_shopify}`, 'success');
-                                addLogEntry(`Failed uploads: ${data.details.failed_uploads}`, 'info');
-                            }
-                        }
+                        addLogEntry(data.message, "success");
                         if (data.download_url) {
                             window.location.href = data.download_url;
                         }
                     } else {
-                        addLogEntry('Error: ' + data.message, 'error');
+                        addLogEntry("Error: " + data.message, "error");
                     }
                 } catch (error) {
-                    addLogEntry('Error: ' + error.message, 'error');
+                    addLogEntry("Error: " + error.message, "error");
                 } finally {
                     submitBtn.disabled = false;
                 }
             };
+        </script>
+    </body>
+    </html>
+    '''
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
