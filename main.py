@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, render_template
 from flask_socketio import SocketIO, emit
 import pandas as pd
 from datetime import datetime
@@ -12,7 +12,11 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Keep existing Shopify initialization code...
+# Initialize Shopify
+shopify.Session.setup(
+    api_key=os.environ.get('SHOPIFY_API_KEY'),
+    secret=os.environ.get('SHOPIFY_API_SECRET')
+)
 
 def emit_progress(message, current, total, status='processing'):
     """Emit progress update through WebSocket"""
@@ -27,6 +31,42 @@ def emit_progress(message, current, total, status='processing'):
         })
     except Exception as e:
         print(f"Error emitting progress: {e}")
+
+def generate_csv():
+    """Generate CSV from scraped products with page range"""
+    try:
+        start_page = int(request.form.get('start_page', 1))
+        end_page = int(request.form.get('end_page', 50))
+        
+        if start_page < 1 or end_page > 4331:
+            raise ValueError("Invalid page range")
+        if start_page > end_page:
+            raise ValueError("Start page must be less than end page")
+            
+        emit_progress("Starting product scraping...", 0, end_page - start_page + 1)
+        products = scrape_acdc_products(start_page=start_page, end_page=end_page, progress_callback=emit_progress)
+        
+        if products:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
+            return save_to_csv(products, filename)
+    except Exception as e:
+        print(f"Error generating CSV: {e}")
+        emit_progress(f"Error: {str(e)}", 0, 100, 'error')
+        return None
+
+def init_shopify_session():
+    """Initialize Shopify API session"""
+    try:
+        shop_url = f"{os.environ.get('SHOP_NAME')}.myshopify.com"
+        access_token = os.environ.get('ACCESS_TOKEN')
+        
+        session = shopify.Session(shop_url, '2023-10', access_token)
+        shopify.ShopifyResource.activate_session(session)
+        return True
+    except Exception as e:
+        print(f"Error initializing Shopify session: {e}")
+        return False
 
 def upload_to_shopify(products):
     """Upload products to Shopify with real-time progress updates"""
@@ -107,6 +147,85 @@ def upload_to_shopify(products):
     
     return results
 
+@app.route('/download-csv', methods=['GET'])
+def download_csv():
+    """Endpoint to download the latest product data as CSV"""
+    try:
+        filename = request.args.get('file')
+        if not filename:
+            return "No filename specified", 400
+            
+        file_path = os.path.join('/tmp', os.path.basename(filename))
+        if os.path.exists(file_path):
+            response = send_file(
+                file_path,
+                mimetype='text/csv',
+                as_attachment=True,
+                download_name=os.path.basename(filename)
+            )
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+        return "File not found", 404
+    except Exception as e:
+        return str(e), 500
+
+@app.route('/sync', methods=['POST'])
+def sync_products():
+    """Generate CSV and optionally upload to Shopify"""
+    try:
+        # First generate CSV
+        filename = generate_csv()
+        if not filename:
+            return jsonify({
+                'success': False,
+                'message': 'No products found to sync'
+            })
+
+        # If we have Shopify credentials, try to upload
+        if all([
+            os.environ.get('SHOPIFY_API_KEY'),
+            os.environ.get('SHOPIFY_API_SECRET'),
+            os.environ.get('SHOP_NAME'),
+            os.environ.get('ACCESS_TOKEN')
+        ]):
+            # Read products from CSV
+            df = pd.read_csv(filename)
+            products = df.to_dict('records')
+            
+            # Upload to Shopify
+            upload_results = upload_to_shopify(products)
+            
+            base_filename = os.path.basename(filename)
+            return jsonify({
+                'success': True,
+                'message': f'Sync completed. {upload_results["uploaded"]} products uploaded to Shopify, {upload_results["failed"]} failed.',
+                'details': {
+                    'total_processed': len(products),
+                    'uploaded_to_shopify': upload_results['uploaded'],
+                    'failed_uploads': upload_results['failed'],
+                    'errors': upload_results['errors'][:5] if upload_results['errors'] else []
+                },
+                'download_url': f'/download-csv?file={base_filename}',
+                'filename': base_filename
+            })
+        else:
+            # If no Shopify credentials, just return CSV download
+            base_filename = os.path.basename(filename)
+            return jsonify({
+                'success': True,
+                'message': 'Successfully scraped products. Download will start automatically.',
+                'download_url': f'/download-csv?file={base_filename}',
+                'filename': base_filename
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
 @app.route('/')
 def index():
     return """
@@ -169,6 +288,13 @@ def index():
             .log-error { background-color: #f2dede; }
             .log-info { background-color: #d9edf7; }
             
+            input[type="number"] {
+                padding: 5px;
+                margin: 5px;
+                border-radius: 3px;
+                border: 1px solid #ddd;
+            }
+            
             button {
                 background-color: #4CAF50;
                 color: white;
@@ -176,6 +302,7 @@ def index():
                 border: none;
                 border-radius: 4px;
                 cursor: pointer;
+                margin-top: 10px;
             }
             
             button:disabled {
@@ -183,11 +310,13 @@ def index():
                 cursor: not-allowed;
             }
             
-            input[type="number"] {
-                padding: 5px;
-                margin: 5px;
-                border-radius: 3px;
-                border: 1px solid #ddd;
+            .form-group {
+                margin-bottom: 15px;
+            }
+            
+            label {
+                display: inline-block;
+                width: 100px;
             }
         </style>
     </head>
@@ -197,13 +326,13 @@ def index():
         <p>Recommended: Scrape 50 pages at a time</p>
         
         <form id="scrapeForm">
-            <div>
+            <div class="form-group">
                 <label for="start_page">Start Page:</label>
                 <input type="number" id="start_page" name="start_page" 
                        value="1" min="1" max="4331" required>
             </div>
             
-            <div>
+            <div class="form-group">
                 <label for="end_page">End Page:</label>
                 <input type="number" id="end_page" name="end_page" 
                        value="50" min="1" max="4331" required>
@@ -235,6 +364,10 @@ def index():
                 logContainer.insertBefore(entry, logContainer.firstChild);
             }
             
+            socket.on('connect', () => {
+                console.log('Connected to server');
+            });
+            
             socket.on('sync_progress', function(data) {
                 progressContainer.style.display = 'block';
                 progressBar.style.width = data.percentage + '%';
@@ -257,6 +390,8 @@ def index():
                 progressContainer.style.display = 'block';
                 submitBtn.disabled = true;
                 
+                addLogEntry('Starting sync process...', 'info');
+                
                 try {
                     const formData = new FormData(e.target);
                     const response = await fetch('/sync', {
@@ -268,6 +403,13 @@ def index():
                     
                     if (data.success) {
                         addLogEntry(data.message, 'success');
+                        if (data.details) {
+                            addLogEntry(`Total processed: ${data.details.total_processed}`, 'info');
+                            if (data.details.uploaded_to_shopify !== undefined) {
+                                addLogEntry(`Uploaded to Shopify: ${data.details.uploaded_to_shopify}`, 'success');
+                                addLogEntry(`Failed uploads: ${data.details.failed_uploads}`, 'info');
+                            }
+                        }
                         if (data.download_url) {
                             window.location.href = data.download_url;
                         }
@@ -280,12 +422,3 @@ def index():
                     submitBtn.disabled = false;
                 }
             };
-        </script>
-    </body>
-    </html>
-    """
-
-# Keep existing route handlers but add emit_progress calls...
-
-if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
