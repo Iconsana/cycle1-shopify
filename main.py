@@ -10,7 +10,7 @@ import json
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
 # Initialize Shopify
 shopify.Session.setup(
@@ -43,16 +43,41 @@ def generate_csv():
         if start_page > end_page:
             raise ValueError("Start page must be less than end page")
             
-        emit_progress("Starting product scraping...", 0, end_page - start_page + 1)
+        # Initialize progress
+        socketio.emit('sync_progress', {
+            'message': 'Starting scrape...',
+            'current': 0,
+            'total': end_page - start_page + 1,
+            'percentage': 0,
+            'status': 'processing'
+        })
+        
         products = scrape_acdc_products(start_page=start_page, end_page=end_page)
         
         if products:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
-            return save_to_csv(products, filename)
+            saved_file = save_to_csv(products, filename)
+            
+            # Update progress for completion
+            socketio.emit('sync_progress', {
+                'message': 'Scraping completed!',
+                'current': end_page - start_page + 1,
+                'total': end_page - start_page + 1,
+                'percentage': 100,
+                'status': 'success'
+            })
+            
+            return saved_file
     except Exception as e:
         print(f"Error generating CSV: {e}")
-        emit_progress(f"Error: {str(e)}", 0, 100, 'error')
+        socketio.emit('sync_progress', {
+            'message': f'Error: {str(e)}',
+            'current': 0,
+            'total': 100,
+            'percentage': 0,
+            'status': 'error'
+        })
         return None
 
 def init_shopify_session():
@@ -77,17 +102,35 @@ def upload_to_shopify(products):
     }
     
     total_products = len(products)
-    emit_progress("Starting upload to Shopify...", 0, total_products)
+    socketio.emit('sync_progress', {
+        'message': 'Starting Shopify upload...',
+        'current': 0,
+        'total': total_products,
+        'percentage': 0,
+        'status': 'processing'
+    })
     
     if not init_shopify_session():
-        emit_progress("Failed to initialize Shopify session", 0, total_products, 'error')
+        socketio.emit('sync_progress', {
+            'message': 'Failed to initialize Shopify session',
+            'current': 0,
+            'total': total_products,
+            'percentage': 0,
+            'status': 'error'
+        })
         results['errors'].append("Failed to initialize Shopify session")
         return results
 
     try:
         for index, product in enumerate(products, 1):
             try:
-                emit_progress(f"Processing: {product['Title']}", index, total_products)
+                socketio.emit('sync_progress', {
+                    'message': f'Processing: {product["Title"]}',
+                    'current': index,
+                    'total': total_products,
+                    'percentage': int((index / total_products) * 100),
+                    'status': 'processing'
+                })
                 
                 new_product = shopify.Product()
                 new_product.title = product['Title']
@@ -110,21 +153,23 @@ def upload_to_shopify(products):
                 
                 if new_product.save():
                     results['uploaded'] += 1
-                    emit_progress(
-                        f"Successfully uploaded: {product['Title']}",
-                        index,
-                        total_products,
-                        'success'
-                    )
+                    socketio.emit('sync_progress', {
+                        'message': f'Uploaded: {product["Title"]}',
+                        'current': index,
+                        'total': total_products,
+                        'percentage': int((index / total_products) * 100),
+                        'status': 'success'
+                    })
                 else:
                     results['failed'] += 1
                     results['errors'].append(f"Failed to save {product['Title']}")
-                    emit_progress(
-                        f"Failed to upload: {product['Title']}",
-                        index,
-                        total_products,
-                        'error'
-                    )
+                    socketio.emit('sync_progress', {
+                        'message': f'Failed to upload: {product["Title"]}',
+                        'current': index,
+                        'total': total_products,
+                        'percentage': int((index / total_products) * 100),
+                        'status': 'error'
+                    })
                 
                 if index % 2 == 0:  # Rate limiting
                     time.sleep(1)
@@ -133,12 +178,24 @@ def upload_to_shopify(products):
                 results['failed'] += 1
                 error_msg = f"Error with {product['Title']}: {str(e)}"
                 results['errors'].append(error_msg)
-                emit_progress(error_msg, index, total_products, 'error')
+                socketio.emit('sync_progress', {
+                    'message': error_msg,
+                    'current': index,
+                    'total': total_products,
+                    'percentage': int((index / total_products) * 100),
+                    'status': 'error'
+                })
                 
     except Exception as e:
         error_msg = f"Global error: {str(e)}"
         results['errors'].append(error_msg)
-        emit_progress(error_msg, 0, total_products, 'error')
+        socketio.emit('sync_progress', {
+            'message': error_msg,
+            'current': 0,
+            'total': total_products,
+            'percentage': 0,
+            'status': 'error'
+        })
     finally:
         try:
             shopify.ShopifyResource.clear_session()
@@ -146,6 +203,7 @@ def upload_to_shopify(products):
             pass
     
     return results
+
 @app.route('/download-csv', methods=['GET'])
 def download_csv():
     """Endpoint to download the latest product data as CSV"""
@@ -174,7 +232,6 @@ def download_csv():
 def sync_products():
     """Generate CSV and optionally upload to Shopify"""
     try:
-        # First generate CSV
         filename = generate_csv()
         if not filename:
             return jsonify({
@@ -182,42 +239,33 @@ def sync_products():
                 'message': 'No products found to sync'
             })
 
-        # If we have Shopify credentials, try to upload
+        base_filename = os.path.basename(filename)
+        
+        # Always return immediate success for CSV generation
+        response_data = {
+            'success': True,
+            'message': 'Successfully scraped products. Download will start automatically.',
+            'download_url': f'/download-csv?file={base_filename}',
+            'filename': base_filename
+        }
+        
+        # If Shopify credentials exist, queue up the Shopify sync
         if all([
             os.environ.get('SHOPIFY_API_KEY'),
             os.environ.get('SHOPIFY_API_SECRET'),
             os.environ.get('SHOP_NAME'),
             os.environ.get('ACCESS_TOKEN')
         ]):
-            # Read products from CSV
-            df = pd.read_csv(filename)
-            products = df.to_dict('records')
-            
-            # Upload to Shopify
-            upload_results = upload_to_shopify(products)
-            
-            base_filename = os.path.basename(filename)
-            return jsonify({
-                'success': True,
-                'message': f'Sync completed. {upload_results["uploaded"]} products uploaded to Shopify, {upload_results["failed"]} failed.',
-                'details': {
-                    'total_processed': len(products),
-                    'uploaded_to_shopify': upload_results['uploaded'],
-                    'failed_uploads': upload_results['failed'],
-                    'errors': upload_results['errors'][:5] if upload_results['errors'] else []
-                },
-                'download_url': f'/download-csv?file={base_filename}',
-                'filename': base_filename
-            })
-        else:
-            # If no Shopify credentials, just return CSV download
-            base_filename = os.path.basename(filename)
-            return jsonify({
-                'success': True,
-                'message': 'Successfully scraped products. Download will start automatically.',
-                'download_url': f'/download-csv?file={base_filename}',
-                'filename': base_filename
-            })
+            try:
+                df = pd.read_csv(filename)
+                products = df.to_dict('records')
+                # Upload to Shopify in background
+                socketio.start_background_task(upload_to_shopify, products)
+            except Exception as e:
+                print(f"Shopify sync error: {e}")
+                # Still return success for CSV even if Shopify fails
+        
+        return jsonify(response_data)
             
     except Exception as e:
         return jsonify({
@@ -248,6 +296,7 @@ def index():
                 border-radius: 3px;
                 box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
                 margin-top: 20px;
+                display: none;
             }
             
             .progress-bar {
@@ -328,7 +377,7 @@ def index():
             <button type="submit" id="submitBtn">Start Sync</button>
         </form>
         
-        <div class="progress-container" id="progressContainer" style="display: none;">
+        <div class="progress-container" id="progressContainer">
             <div class="progress-bar" id="progressBar">
                 <div class="progress-text" id="progressText">0%</div>
             </div>
@@ -337,66 +386,75 @@ def index():
         <div class="log-container" id="logContainer"></div>
 
         <script>
-            const socket = io();
-            const progressBar = document.getElementById("progressBar");
-            const progressText = document.getElementById("progressText");
-            const progressContainer = document.getElementById("progressContainer");
-            const logContainer = document.getElementById("logContainer");
-            const submitBtn = document.getElementById("submitBtn");
+            const socket = io({
+                transports: ['websocket'],
+                upgrade: false,
+                reconnection: true,
+                reconnectionAttempts: 5
+            });
             
-            function addLogEntry(message, type = "info") {
-                const entry = document.createElement("div");
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const progressContainer = document.getElementById('progressContainer');
+            const logContainer = document.getElementById('logContainer');
+            const submitBtn = document.getElementById('submitBtn');
+            
+            function addLogEntry(message, type = 'info') {
+                const entry = document.createElement('div');
                 entry.className = `log-entry log-${type}`;
                 entry.textContent = message;
                 logContainer.insertBefore(entry, logContainer.firstChild);
             }
             
-            socket.on("connect", () => {
-                console.log("Connected to server");
+            socket.on('connect', () => {
+                console.log('Socket connected');
+                addLogEntry('Connected to server', 'success');
             });
             
-            socket.on("sync_progress", function(data) {
-                progressContainer.style.display = "block";
-                progressBar.style.width = data.percentage + "%";
-                progressText.textContent = data.percentage + "%";
+            socket.on('connect_error', (error) => {
+                console.error('Socket connection error:', error);
+                addLogEntry('Connection error: ' + error, 'error');
+            });
+            
+            socket.on('sync_progress', function(data) {
+                console.log('Progress update:', data);
+                progressContainer.style.display = 'block';
+                progressBar.style.width = data.percentage + '%';
+                progressText.textContent = data.percentage + '%';
                 
                 addLogEntry(data.message, data.status);
-                
-                if (data.percentage === 100) {
-                    submitBtn.disabled = false;
-                }
             });
             
-            document.getElementById("scrapeForm").onsubmit = async function(e) {
+            document.getElementById('scrapeForm').onsubmit = async function(e) {
                 e.preventDefault();
                 
-                logContainer.innerHTML = "";
-                progressBar.style.width = "0%";
-                progressText.textContent = "0%";
-                progressContainer.style.display = "block";
+                logContainer.innerHTML = '';
+                progressBar.style.width = '0%';
+                progressText.textContent = '0%';
+                progressContainer.style.display = 'block';
                 submitBtn.disabled = true;
                 
-                addLogEntry("Starting sync process...", "info");
+                addLogEntry('Starting sync process...', 'info');
                 
                 try {
                     const formData = new FormData(e.target);
-                    const response = await fetch("/sync", {
-                        method: "POST",
+                    const response = await fetch('/sync', {
+                        method: 'POST',
                         body: formData
                     });
                     
                     const data = await response.json();
                     
                     if (data.success) {
-                        addLogEntry(data.message, "success");
+                        addLogEntry(data.message, 'success');
                         if (data.download_url) {
                             window.location.href = data.download_url;
                         }
                     } else {
-                        addLogEntry("Error: " + data.message, "error");
+                        addLogEntry('Error: ' + data.message, 'error');
                     }
                 } catch (error) {
-                    addLogEntry("Error: " + error.message, "error");
+                    addLogEntry('Error: ' + error.message, 'error');
                 } finally {
                     submitBtn.disabled = false;
                 }
@@ -407,4 +465,4 @@ def index():
     '''
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
