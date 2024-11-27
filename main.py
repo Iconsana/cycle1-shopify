@@ -85,12 +85,23 @@ def init_shopify_session():
     try:
         shop_url = f"{os.environ.get('SHOP_NAME')}.myshopify.com"
         access_token = os.environ.get('ACCESS_TOKEN')
+        api_version = '2023-10'
         
-        session = shopify.Session(shop_url, '2023-10', access_token)
+        # Debug logging
+        print(f"Initializing Shopify session for shop: {shop_url}")
+        print(f"Using API version: {api_version}")
+        
+        session = shopify.Session(shop_url, api_version, access_token)
         shopify.ShopifyResource.activate_session(session)
-        return True
+        
+        # Verify session
+        shop = shopify.Shop.current()
+        if shop:
+            print(f"Successfully connected to shop: {shop.name}")
+            return True
+        return False
     except Exception as e:
-        print(f"Error initializing Shopify session: {e}")
+        print(f"Error initializing Shopify session: {str(e)}")
         return False
 
 def upload_to_shopify(products):
@@ -296,7 +307,6 @@ def index():
                 border-radius: 3px;
                 box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
                 margin-top: 20px;
-                display: none;
             }
             
             .progress-bar {
