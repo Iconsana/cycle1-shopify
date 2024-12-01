@@ -6,7 +6,8 @@ import shopify
 
 def create_app():
     """Initialize the core application"""
-    app = Flask(__name__)
+    app = Flask(__name__, 
+    template_folder='templates')  # Explicitly set template folder
     
     # Configure Flask app
     app.config.update(
