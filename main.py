@@ -29,7 +29,9 @@ def emit_progress(message, current, total, status='processing'):
             'percentage': percentage,
             'status': status
         })
-        # Add this function after emit_progress
+    except Exception as e:
+        print(f"Error emitting progress: {e}")
+
 def generate_csv():
     try:
         start_page = int(request.form.get('start_page', 1))
@@ -48,8 +50,6 @@ def generate_csv():
     except Exception as e:
         print(f"Error generating CSV: {e}")
         return None
-    except Exception as e:
-        print(f"Error emitting progress: {e}")
 
 def init_shopify_session():
     try:
@@ -128,7 +128,8 @@ def upload_to_shopify(products):
             
     shopify.ShopifyResource.clear_session()
     return results
-    @app.route('/cancel', methods=['POST'])
+
+@app.route('/cancel', methods=['POST'])
 def cancel_sync():
     global current_sync_thread
     try:
