@@ -29,6 +29,25 @@ def emit_progress(message, current, total, status='processing'):
             'percentage': percentage,
             'status': status
         })
+        # Add this function after emit_progress
+def generate_csv():
+    try:
+        start_page = int(request.form.get('start_page', 1))
+        end_page = int(request.form.get('end_page', 50))
+        
+        if start_page < 1 or end_page > 4331:
+            raise ValueError("Invalid page range")
+            
+        products = scrape_acdc_products(start_page=start_page, end_page=end_page)
+        
+        if products:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
+            return save_to_csv(products, filename)
+        return None
+    except Exception as e:
+        print(f"Error generating CSV: {e}")
+        return None
     except Exception as e:
         print(f"Error emitting progress: {e}")
 
