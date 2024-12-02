@@ -207,13 +207,9 @@ def sync_products():
             'message': str(e)
         }), 500
 
-#@app.route('/')
-#def index():
-    #return render_template('index.html')
-
- @app.route('/')
+@app.route('/')
 def index():
-    return render_template('index.html')  # Make sure index.html is in app/templates/ 
+    return render_template('index.html')
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
