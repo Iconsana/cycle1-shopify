@@ -31,7 +31,7 @@ def emit_progress(message, current, total, status='processing'):
         })
     except Exception as e:
         print(f"Error emitting progress: {e}")
-
+        
 def generate_csv():
     """Generate CSV from scraped products with enhanced error handling"""
     try:
