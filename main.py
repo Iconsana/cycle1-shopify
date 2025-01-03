@@ -9,6 +9,7 @@ import time
 import json
 from threading import Event, Thread
 import threading
+from price_monitor import PriceMonitor
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
@@ -31,9 +32,8 @@ def emit_progress(message, current, total, status='processing'):
         })
     except Exception as e:
         print(f"Error emitting progress: {e}")
-        
+
 def generate_csv():
-    """Generate CSV from scraped products with enhanced error handling"""
     try:
         start_page = int(request.form.get('start_page', 1))
         end_page = int(request.form.get('end_page', 50))
@@ -43,7 +43,6 @@ def generate_csv():
         if start_page > end_page:
             raise ValueError("Start page must be less than end page")
             
-        # Use the enhanced scraper with progress callback
         products = scrape_acdc_products(
             start_page=start_page,
             end_page=end_page,
@@ -56,7 +55,6 @@ def generate_csv():
             filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
             saved_file = save_to_csv(products, filename)
             
-            # Final progress update
             emit_progress(
                 f'Scraping completed! Found {len(products)} products',
                 end_page - start_page + 1,
@@ -73,7 +71,6 @@ def generate_csv():
             'error'
         )
         return None
-
 
 def init_shopify_session():
     try:
@@ -153,6 +150,59 @@ def upload_to_shopify(products):
     shopify.ShopifyResource.clear_session()
     return results
 
+@app.route('/monitor/test-connection')
+def test_monitor_connection():
+    """Test Google Sheets connection"""
+    try:
+        monitor = PriceMonitor(
+            'cycle1-price-monitor-e2948349fb68.json',
+            '1VDmG5diadJ1hNdv6ZnHfT1mVTGFM-xejWKe_ACWiuRo'
+        )
+        if monitor.test_connection():
+            return jsonify({
+                'success': True,
+                'message': 'Successfully connected to Google Sheets'
+            })
+        return jsonify({
+            'success': False,
+            'message': 'Failed to connect to Google Sheets'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/monitor/check-prices')
+def check_prices():
+    """Test price checking for the first product"""
+    try:
+        monitor = PriceMonitor(
+            'cycle1-price-monitor-e2948349fb68.json',
+            '1VDmG5diadJ1hNdv6ZnHfT1mVTGFM-xejWKe_ACWiuRo'
+        )
+        
+        # Test with first product
+        test_sku = "A0001/3/230-NS"
+        success = monitor.update_single_product(2, test_sku)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Successfully checked and updated price',
+                'sku': test_sku
+            })
+        return jsonify({
+            'success': False,
+            'message': 'Failed to update price',
+            'sku': test_sku
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
 @app.route('/cancel', methods=['POST'])
 def cancel_sync():
     global current_sync_thread
@@ -230,6 +280,7 @@ def sync_products():
             'success': False,
             'message': str(e)
         }), 500
+
 @app.route('/')
 def index():
     return '''
@@ -239,7 +290,6 @@ def index():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ACDC Product Sync</title>
-        <!-- Shopify Polaris -->
         <link rel="stylesheet" href="https://unpkg.com/@shopify/polaris@12.0.0/build/esm/styles.css"/>
         <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
@@ -308,6 +358,7 @@ def index():
                 border: none;
                 border-radius: 4px;
                 cursor: pointer;
+                margin: 5px;
             }
             
             button:disabled {
@@ -322,6 +373,9 @@ def index():
             
             .form-section {
                 margin-bottom: 20px;
+                padding: 20px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
             }
         </style>
     </head>
@@ -330,7 +384,7 @@ def index():
             <h1>ACDC Product Sync</h1>
             
             <div class="form-section">
-                <h2>Sync Settings</h2>
+                <h2>Product Sync Settings</h2>
                 <form id="syncForm">
                     <div>
                         <label for="startPage">Start Page:</label>
@@ -343,6 +397,13 @@ def index():
                     <button type="submit" id="submitBtn">Start Sync</button>
                     <button type="button" id="cancelBtn" style="display: none;">Cancel Sync</button>
                 </form>
+            </div>
+
+            <div class="form-section">
+                <h2>Price Monitor</h2>
+                <button type="button" id="testConnectionBtn">Test Connection</button>
+                <button type="button" id="checkPricesBtn">Check Prices</button>
+                <div id="monitorStatus"></div>
             </div>
 
             <div class="progress-section" style="display: none;">
@@ -368,6 +429,7 @@ def index():
             const progressBar = document.getElementById('progressBar');
             const progressSection = document.querySelector('.progress-section');
             const statusMessage = document.getElementById('statusMessage');
+
             const productCount = document.getElementById('productCount');
             const logContainer = document.getElementById('logContainer');
             const submitBtn = document.getElementById('submitBtn');
@@ -484,6 +546,27 @@ def index():
                     addLogEntry('Error cancelling sync: ' + error.message, 'error');
                 }
             });
+
+            // Price Monitor buttons
+            document.getElementById('testConnectionBtn').addEventListener('click', async () => {
+                try {
+                    const response = await fetch('/monitor/test-connection');
+                    const data = await response.json();
+                    addLogEntry(data.message, data.success ? 'success' : 'error');
+                } catch (error) {
+                    addLogEntry('Error: ' + error.message, 'error');
+                }
+            });
+
+            document.getElementById('checkPricesBtn').addEventListener('click', async () => {
+                try {
+                    const response = await fetch('/monitor/check-prices');
+                    const data = await response.json();
+                    addLogEntry(data.message, data.success ? 'success' : 'error');
+                } catch (error) {
+                    addLogEntry('Error: ' + error.message, 'error');
+                }
+            });
         </script>
     </body>
     </html>
@@ -491,3 +574,4 @@ def index():
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
+            const productCount = document.getElementByI
