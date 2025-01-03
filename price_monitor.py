@@ -8,17 +8,23 @@ import time
 from datetime import datetime
 import logging
 import re
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PriceMonitor:
-    def __init__(self, credentials_file, spreadsheet_id):
+    def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        self.credentials_file = credentials_file
         try:
-            self.credentials = service_account.Credentials.from_service_account_file(
-                credentials_file,
+            # Get credentials from environment variable
+            credentials_json = os.environ.get('GOOGLE_CREDENTIALS')
+            if not credentials_json:
+                raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
+                
+            credentials_info = json.loads(credentials_json)
+            self.credentials = service_account.Credentials.from_service_account_info(
+                credentials_info,
                 scopes=['https://www.googleapis.com/auth/spreadsheets']
             )
             self.service = build('sheets', 'v4', credentials=self.credentials)
