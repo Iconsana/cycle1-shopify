@@ -17,8 +17,8 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
+app = Flask(__name__, 
+           template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'templates'))app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
 # Constants
@@ -312,8 +312,19 @@ def sync_products():
 
 @app.route('/')
 def index():
-    """Main page"""
-    return render_template('index.html')
+    """Landing page"""
+    try:
+        # Debug: Print current directory and template folder
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Template folder: {app.template_folder}")
+        
+        return render_template('index.html')
+    except Exception as e:
+        print(f"Template error: {e}")
+        # Fallback: Try absolute path
+        template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'templates')
+        print(f"Looking for template in: {template_dir}")
+        return render_template('index.html')
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
