@@ -7,7 +7,7 @@ import shopify
 def create_app():
     """Initialize the core application"""
     app = Flask(__name__, 
-    template_folder='templates')  # Explicitly set template folder
+                template_folder='templates')  # Explicitly set template folder
     
     # Configure Flask app
     app.config.update(
@@ -28,10 +28,5 @@ def create_app():
     
     # Register routes
     init_routes(app)
-    
-    @app.route('/')
-    def index():
-        """Landing page"""
-        return app.send_static_file('index.html')
     
     return app
