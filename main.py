@@ -13,12 +13,17 @@ from price_monitor import PriceMonitor
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, 
-           template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'templates'))app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
+# Initialize Flask with correct template folder
+template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'templates')
+app = Flask(__name__, template_folder=template_dir)
+
+# Configure app
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
+
+# Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
 # Constants
