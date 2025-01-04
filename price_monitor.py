@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 import logging
 import json
+from crawler import ACDCCrawler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 class PriceMonitor:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
+        self.crawler = ACDCCrawler()
         try:
             # Get credentials from environment variable
             credentials_json = os.environ.get('GOOGLE_CREDENTIALS')
@@ -50,30 +52,17 @@ class PriceMonitor:
             return False
 
     def get_acdc_price(self, sku):
-        """Get price from ACDC website"""
+        """Get price using crawler"""
         try:
-            search_url = f"https://acdc.co.za/search?controller=search&s={sku}"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            response = requests.get(search_url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                price_elem = soup.select_one(".price")
-                
-                if price_elem:
-                    price_text = price_elem.text.strip()
-                    price = float(price_text.replace('R', '').replace(',', '').strip())
-                    logger.info(f"Found price for {sku}: R{price}")
-                    return price
-                    
-            logger.warning(f"No price found for {sku}")
+            products_data = self.crawler.crawl_acdc_products()
+            if products_data and sku in products_data:
+                price_data = products_data[sku]
+                return price_data['prices'].get('EDENVALE')
             return None
-                
         except Exception as e:
             logger.error(f"Error getting price for {sku}: {e}")
-            return None
+            return None        
+         
 
     def update_single_product(self, row_number, sku):
         """Update a single product's price"""
@@ -165,7 +154,18 @@ class PriceMonitor:
                 except Exception as e:
                     results['failed'] += 1
                     results['errors'].append(f"Error processing {sku}: {str(e)}")
-                    
+
+# Add the new update_prices method
+    def update_prices(self):
+        """Update prices using crawler approach"""
+        [paste the update_prices function here]
+
+    # Modify check_all_prices to use update_prices
+    def check_all_prices(self):
+        """Check prices for all products"""
+        return self.update_prices()
+        \
+            
             return results
             
         except Exception as e:
