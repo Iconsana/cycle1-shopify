@@ -16,8 +16,13 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Flask
-app = Flask(__name__)
+# Initialize Flask with correct template folder
+template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'templates')
+app = Flask(__name__, template_folder=template_dir)
+
+# Log template directory for debugging
+logger.info(f"Template directory: {template_dir}")
+
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 
 # Configure SocketIO with increased timeout
@@ -27,7 +32,7 @@ socketio = SocketIO(
     async_mode='eventlet', 
     logger=True, 
     engineio_logger=True,
-    ping_timeout=60,  # Increase timeout
+    ping_timeout=60,
     ping_interval=25
 )
 
@@ -237,7 +242,25 @@ def sync_products():
 @app.route('/')
 def index():
     """Landing page"""
-    return render_template('index.html')
+    try:
+        logger.info("Attempting to render index.html")
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Template folder: {app.template_folder}")
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Error rendering template: {e}")
+        return f"Template error: {str(e)}", 500
+
+@app.route('/debug-info')
+def debug_info():
+    """Debug endpoint to check template configuration"""
+    return jsonify({
+        'cwd': os.getcwd(),
+        'template_folder': app.template_folder,
+        'template_list': os.listdir(app.template_folder) if os.path.exists(app.template_folder) else [],
+        'exists': os.path.exists(os.path.join(app.template_folder, 'index.html'))
+    })
 
 if __name__ == '__main__':
+    logger.info(f"Starting server with template directory: {template_dir}")
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
