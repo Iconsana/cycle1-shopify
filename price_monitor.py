@@ -7,7 +7,6 @@ import requests
 import time
 from datetime import datetime
 import logging
-import re
 import json
 
 logging.basicConfig(level=logging.INFO)
@@ -35,7 +34,7 @@ class PriceMonitor:
             raise
 
     def test_connection(self):
-        """Test the connection to Google Sheets"""
+        """Test connection to Google Sheets"""
         try:
             result = self.sheet.get(spreadsheetId=self.spreadsheet_id).execute()
             logger.info(f"Successfully connected to sheet: {result['properties']['title']}")
@@ -44,56 +43,28 @@ class PriceMonitor:
             logger.error(f"Connection test failed: {e}")
             return False
 
-    def read_products(self):
-        """Read all products from Google Sheet"""
-        try:
-            result = self.sheet.values().get(
-                spreadsheetId=self.spreadsheet_id,
-                range='A2:G'  # Skip header row
-            ).execute()
-            values = result.get('values', [])
-            logger.info(f"Read {len(values)} products from sheet")
-            return values
-        except Exception as e:
-            logger.error(f"Error reading from sheet: {e}")
-            return []
-
-    def clean_price(self, price_str):
-        """Clean price string to float"""
-        try:
-            # Remove currency symbol, spaces, and commas
-            price_str = price_str.replace('R', '').replace(',', '').strip()
-            # Remove any other non-numeric characters except decimal point
-            price_str = re.sub(r'[^\d.]', '', price_str)
-            return float(price_str)
-        except Exception as e:
-            logger.error(f"Error cleaning price {price_str}: {e}")
-            return 0.0
-
     def get_acdc_price(self, sku):
         """Get price from ACDC website"""
         try:
-            url = f"https://acdc.co.za/search?controller=search&s={sku}"
+            search_url = f"https://acdc.co.za/search?controller=search&s={sku}"
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code != 200:
-                return None
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            products = soup.select(".product-miniature")
-            
-            for product in products:
-                product_sku = product.select_one(".product-reference")
-                if product_sku and sku.lower() in product_sku.text.strip().lower():
-                    price_elem = product.select_one(".price")
-                    if price_elem:
-                        return self.clean_price(price_elem.text)
-            
+            response = requests.get(search_url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                price_elem = soup.select_one(".price")
+                
+                if price_elem:
+                    price_text = price_elem.text.strip()
+                    price = float(price_text.replace('R', '').replace(',', '').strip())
+                    logger.info(f"Found price for {sku}: R{price}")
+                    return price
+                    
+            logger.warning(f"No price found for {sku}")
             return None
-            
+                
         except Exception as e:
             logger.error(f"Error getting price for {sku}: {e}")
             return None
@@ -147,9 +118,8 @@ class PriceMonitor:
                 
                 logger.info(f"Updated {sku} - Status: {status}")
                 return True
-            else:
-                logger.warning(f"No price found for {sku}")
-                return False
+            
+            return False
                 
         except Exception as e:
             logger.error(f"Error updating product {sku}: {e}")
@@ -157,46 +127,41 @@ class PriceMonitor:
 
     def check_all_prices(self):
         """Check prices for all products"""
-        products = self.read_products()
         results = {
             'updated': 0,
             'failed': 0,
             'errors': []
         }
         
-        for index, product in enumerate(products, start=2):  # Start from row 2
-            try:
-                sku = product[0]
-                if self.update_single_product(index, sku):
-                    results['updated'] += 1
-                else:
-                    results['failed'] += 1
-                    results['errors'].append(f"Failed to update {sku}")
-                
-                # Add delay between requests
-                time.sleep(2)
-                
-            except Exception as e:
-                results['failed'] += 1
-                results['errors'].append(f"Error processing {sku}: {str(e)}")
-                
-        return results
-
-    def get_row_by_sku(self, sku):
-        """Find row number for a given SKU"""
         try:
+            # Get all SKUs
             result = self.sheet.values().get(
                 spreadsheetId=self.spreadsheet_id,
-                range='A:A'
+                range='A2:A'  # Skip header row
             ).execute()
             
-            values = result.get('values', [])
-            for i, row in enumerate(values):
-                if row and row[0] == sku:
-                    return i + 1  # Add 1 because sheet rows are 1-based
-            
-            return None
+            if not result.get('values'):
+                logger.error("No products found in sheet")
+                return results
+                
+            for row_num, row in enumerate(result['values'], start=2):
+                try:
+                    sku = row[0]
+                    if self.update_single_product(row_num, sku):
+                        results['updated'] += 1
+                    else:
+                        results['failed'] += 1
+                        results['errors'].append(f"Failed to update {sku}")
+                    
+                    # Add delay between requests
+                    time.sleep(2)
+                    
+                except Exception as e:
+                    results['failed'] += 1
+                    results['errors'].append(f"Error processing {sku}: {str(e)}")
+                    
+            return results
             
         except Exception as e:
-            logger.error(f"Error finding row for SKU {sku}: {e}")
-            return None
+            logger.error(f"Error checking all prices: {e}")
+            return results
