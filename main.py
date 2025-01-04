@@ -178,9 +178,7 @@ def generate_csv():
 def test_monitor_connection():
     """Test Google Sheets connection"""
     try:
-        monitor = PriceMonitor(
-            spreadsheet_id='1VDmG5diadJ1hNdv6ZnHfT1mVTGFM-xejWKe_ACWiuRo'
-        )
+        monitor = PriceMonitor(SPREADSHEET_ID)  # Remove credentials_path argument
         if monitor.test_connection():
             return jsonify({
                 'success': True,
@@ -201,10 +199,7 @@ def test_monitor_connection():
 def check_prices():
     """Check prices for products"""
     try:
-        monitor = PriceMonitor(
-            get_credentials_path(),
-            SPREADSHEET_ID
-        )
+        monitor = PriceMonitor(SPREADSHEET_ID)  # Remove credentials_path argument
         
         # Check first product first
         test_sku = "A0001/3/230-NS"
