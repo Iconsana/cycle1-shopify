@@ -14,25 +14,28 @@ logger = logging.getLogger(__name__)
 
 class PriceMonitor:
     def __init__(self, spreadsheet_id):
-        self.spreadsheet_id = spreadsheet_id
-        try:
-            # Get credentials from environment variable
-            credentials_json = os.environ.get('GOOGLE_CREDENTIALS')
-            if not credentials_json:
-                raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
-                
-            credentials_info = json.loads(credentials_json)
-            self.credentials = service_account.Credentials.from_service_account_info(
-                credentials_info,
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
-            )
-            self.service = build('sheets', 'v4', credentials=self.credentials)
-            self.sheet = self.service.spreadsheets()
-            logger.info("Successfully initialized Google Sheets connection")
-        except Exception as e:
-            logger.error(f"Failed to initialize: {e}")
-            raise
-
+    self.spreadsheet_id = spreadsheet_id
+    try:
+        # Debug: Check if credentials are accessible
+        credentials_json = os.environ.get('GOOGLE_CREDENTIALS')
+        if not credentials_json:
+            logger.error("GOOGLE_CREDENTIALS not found in environment variables")
+            raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
+            
+        logger.info("Found credentials in environment variables")
+        
+        credentials_info = json.loads(credentials_json)
+        self.credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=['https://www.googleapis.com/auth/spreadsheets']
+        )
+        logger.info("Successfully initialized Google credentials")
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON format in credentials: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Failed to initialize: {e}")
+        raise
     def test_connection(self):
         """Test connection to Google Sheets"""
         try:
