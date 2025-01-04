@@ -8,7 +8,7 @@ import random
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
-logging.basicConfig(level=logging.DEBUG)  # Set to DEBUG for development
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 class ACDCCrawler:
@@ -36,53 +36,39 @@ class ACDCCrawler:
     def _extract_price(self, text):
         """Extract price from text"""
         if not text:
+            logger.debug("Empty price text received")
             return None
         try:
-            logger.debug(f"Extracting price from: {text}")
+            logger.debug(f"Raw price text: {text}")
             
             # Remove currency symbol, VAT text and spaces
             price_text = text.strip()
+            price_text = re.sub(r'\(.*?\)', '', price_text)  # Remove anything in parentheses
             price_text = price_text.replace('EXCL. VAT', '')
             price_text = price_text.replace('EXCL VAT', '')
-            price_text = price_text.replace('(', '').replace(')', '')
             price_text = price_text.replace('R', '')
             price_text = price_text.strip()
             
-            # Remove any non-digit characters except dots and commas
-            price_text = re.sub(r'[^\d.,]', '', price_text)
+            logger.debug(f"After cleaning text: {price_text}")
             
-            # Convert to proper decimal format (handle both comma and dot)
-            price_text = price_text.replace(',', '.')
-            
-            # If multiple decimals, keep only first one
-            if price_text.count('.') > 1:
-                parts = price_text.split('.')
-                price_text = parts[0] + '.' + parts[1]
-            
-            if price_text:
+            # Extract numbers
+            price_match = re.search(r'[\d,]+\.?\d*', price_text)
+            if price_match:
+                price_text = price_match.group()
+                logger.debug(f"Matched price text: {price_text}")
+                
+                # Convert to proper decimal format
+                price_text = price_text.replace(',', '.')
                 price = float(price_text)
-                logger.debug(f"Extracted price: {price}")
+                logger.debug(f"Final extracted price: {price}")
                 return price
+            
+            logger.debug("No valid price pattern found")
             return None
-        
+            
         except Exception as e:
             logger.error(f"Price extraction error: {e}")
             return None
-
-    def _clean_sku(self, sku):
-        """Clean and standardize SKU format"""
-        if sku:
-            # Remove any accidental double slashes
-            sku = re.sub(r'/+', '/', sku)
-            # Remove trailing/leading slashes and spaces
-            sku = sku.strip('/ ')
-            # Replace slashes with dashes for URL
-            sku = sku.replace('/', '-')
-            # Convert to uppercase
-            sku = sku.upper()
-            logger.debug(f"Cleaned SKU: {sku}")
-            return sku
-        return None
 
     def get_price_from_url(self, url, sku):
         """Get price from a specific URL"""
@@ -92,48 +78,43 @@ class ACDCCrawler:
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
-                logger.info(f"Successfully fetched page for {sku}")
+                logger.debug(f"Page content length: {len(response.content)}")
 
-                # Method 1: Try price_tag_c6 class (search results)
-                price_elem = soup.find('span', class_=['price_tag_c6', 'product-price'])
-                if price_elem:
-                    price = self._extract_price(price_elem.get_text())
-                    if price:
-                        logger.info(f"Found price (Method 1) for {sku}: R{price}")
-                        return price
+                # Log the entire relevant section for debugging
+                price_sections = soup.find_all(['span', 'div'], class_=['price_tag_c6', 'span_head_c2', 'price'])
+                logger.debug(f"Found {len(price_sections)} price sections")
+                for section in price_sections:
+                    logger.debug(f"Price section HTML: {section}")
 
-                # Method 2: Try span_head_c2 class (product page)
+                # Method 1: Try product page price (span_head_c2)
                 price_elem = soup.find('span', class_='span_head_c2')
                 if price_elem:
+                    logger.debug(f"Found span_head_c2: {price_elem}")
                     price = self._extract_price(price_elem.get_text())
                     if price:
-                        logger.info(f"Found price (Method 2) for {sku}: R{price}")
                         return price
 
-                # Method 3: Try finding price in product header
-                price_elem = soup.find('div', class_='product_header_con_c5')
+                # Method 2: Try search results price (price_tag_c6)
+                price_elem = soup.find('span', class_='price_tag_c6')
                 if price_elem:
-                    # Look for any price text
-                    price_text = price_elem.find(string=re.compile(r'R\s*[\d,]+\.?\d*'))
-                    if price_text:
-                        price = self._extract_price(price_text)
-                        if price:
-                            logger.info(f"Found price (Method 3) for {sku}: R{price}")
-                            return price
+                    logger.debug(f"Found price_tag_c6: {price_elem}")
+                    price = self._extract_price(price_elem.get_text())
+                    if price:
+                        return price
 
-                # Method 4: Try finding in product miniature
-                product_containers = soup.find_all('article', class_='product-miniature')
-                for container in product_containers:
-                    if sku.lower() in str(container).lower():
-                        # Check for price span
-                        price_span = container.find('span', class_='price')
-                        if price_span:
-                            price = self._extract_price(price_span.get_text())
+                # Method 3: Look for any price near the SKU
+                product_section = soup.find(string=re.compile(sku, re.IGNORECASE))
+                if product_section:
+                    parent = product_section.find_parent()
+                    if parent:
+                        price_text = parent.find(string=re.compile(r'R\s*[\d,]+\.?\d*'))
+                        if price_text:
+                            logger.debug(f"Found price near SKU: {price_text}")
+                            price = self._extract_price(price_text)
                             if price:
-                                logger.info(f"Found price (Method 4) for {sku}: R{price}")
                                 return price
 
-                logger.warning(f"No price found for {sku} on page")
+                logger.warning(f"No price found for {sku}")
                 return None
             
             logger.error(f"Failed to get page: {response.status_code}")
@@ -151,11 +132,15 @@ class ACDCCrawler:
         for index, sku in enumerate(sku_list, 1):
             try:
                 logger.info(f"Processing {index}/{total_skus}: {sku}")
-                clean_sku = self._clean_sku(sku)
                 
                 # Try search URL first
-                search_url = f"{self.base_url}/search?controller=search&s={clean_sku}"
-                price = self.get_price_from_url(search_url, clean_sku)
+                search_url = f"{self.base_url}/search?controller=search&s={sku}"
+                price = self.get_price_from_url(search_url, sku)
+                
+                if not price:
+                    # Try direct product URL as backup
+                    product_url = f"{self.base_url}/product/{sku.lower()}"
+                    price = self.get_price_from_url(product_url, sku)
                 
                 if price:
                     results[sku] = {
@@ -178,12 +163,6 @@ class ACDCCrawler:
         return results
 
 if __name__ == "__main__":
-    # Configure logging for testing
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
     # Test the crawler
     crawler = ACDCCrawler()
     test_skus = ["DF1730SL-20A"]
