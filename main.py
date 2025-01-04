@@ -232,6 +232,43 @@ def check_prices():
             'message': str(e)
         }), 500
 
+@app.route('/monitor/update-all-prices')
+def update_all_prices():
+    """Update all prices in the spreadsheet"""
+    try:
+        monitor = PriceMonitor(
+            spreadsheet_id='1VDmG5diadJ1hNdv6ZnHfT1mVTGFM-xejWKe_ACWiuRo'
+        )
+        
+        # Start price updates in background
+        def update_task():
+            try:
+                results = monitor.check_all_prices()
+                socketio.emit('price_update_complete', {
+                    'success': True,
+                    'message': f"Updated {results['updated']} prices, {results['failed']} failed",
+                    'details': results
+                })
+            except Exception as e:
+                socketio.emit('price_update_complete', {
+                    'success': False,
+                    'message': str(e)
+                })
+
+        thread = Thread(target=update_task)
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Price update started'
+        })
+    except Exception as e:
+        logger.error(f"Failed to start price update: {e}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
 @app.route('/cancel', methods=['POST'])
 def cancel_sync():
     """Cancel ongoing sync"""
