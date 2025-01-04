@@ -232,6 +232,90 @@
             }
         });
 
+        # Add this right after your existing Sync Settings section
+
+        <div class="form-section" style="margin-top: 20px; padding: 20px; border: 1px solid #ddd; border-radius: 4px;">
+            <h2>Price Monitor Settings</h2>
+            <div>
+                <button type="button" id="testConnectionBtn" class="monitor-btn">Test Google Sheets Connection</button>
+                <button type="button" id="checkPricesBtn" class="monitor-btn">Update Prices</button>
+                <button type="button" id="viewPricesBtn" class="monitor-btn">View Price History</button>
+            </div>
+            <div id="monitorStatus" style="margin-top: 10px;"></div>
+        </div>
+
+        <!-- Add styles for the new buttons -->
+        <style>
+            .monitor-btn {
+                background-color: #008060;
+                color: white;
+                padding: 10px 20px;
+                margin: 5px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            
+            .monitor-btn:hover {
+                background-color: #006e52;
+            }
+            
+            .monitor-btn:disabled {
+                background-color: #cccccc;
+                cursor: not-allowed;
+            }
+            
+            #monitorStatus {
+                padding: 10px;
+                margin-top: 10px;
+                border-radius: 4px;
+            }
+        </style>
+
+        <!-- Add JavaScript for the new buttons -->
+        <script>
+            document.getElementById('testConnectionBtn').addEventListener('click', async () => {
+                try {
+                    addLogEntry('Testing Google Sheets connection...', 'info');
+                    const response = await fetch('/monitor/test-connection');
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        addLogEntry('Google Sheets connection successful!', 'success');
+                    } else {
+                        addLogEntry('Connection failed: ' + data.message, 'error');
+                    }
+                } catch (error) {
+                    addLogEntry('Error: ' + error.message, 'error');
+                }
+            });
+
+            document.getElementById('checkPricesBtn').addEventListener('click', async () => {
+                try {
+                    addLogEntry('Starting price check...', 'info');
+                    const response = await fetch('/monitor/check-prices');
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        addLogEntry('Price check completed: ' + data.message, 'success');
+                    } else {
+                        addLogEntry('Price check failed: ' + data.message, 'error');
+                    }
+                } catch (error) {
+                    addLogEntry('Error: ' + error.message, 'error');
+                }
+            });
+
+            document.getElementById('viewPricesBtn').addEventListener('click', async () => {
+                try {
+                    // Open Google Sheet in new tab
+                    window.open('https://docs.google.com/spreadsheets/d/1VDmG5diadJ1hNdv6ZnHfT1mVTGFM-xejWKe_ACWiuRo/edit', '_blank');
+                } catch (error) {
+                    addLogEntry('Error opening spreadsheet: ' + error.message, 'error');
+                }
+            });
+        </script>
+
         cancelBtn.addEventListener('click', async () => {
             try {
                 const response = await fetch('/cancel', {
