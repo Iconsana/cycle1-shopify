@@ -8,7 +8,7 @@ import random
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)  # Set to DEBUG for development
 logger = logging.getLogger(__name__)
 
 class ACDCCrawler:
@@ -30,6 +30,7 @@ class ACDCCrawler:
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         session.mount("https://", adapter)
+        session.mount("http://", adapter)
         return session
 
     def _extract_price(self, text):
@@ -37,29 +38,33 @@ class ACDCCrawler:
         if not text:
             return None
         try:
-            # Log the incoming text for debugging
             logger.debug(f"Extracting price from: {text}")
             
-            # Remove 'EXCL. VAT' and 'R', keep numbers and decimal
-            price_text = text.replace('EXCL. VAT', '').replace('EXCL VAT', '').replace('R', '').strip()
-            # Remove parentheses
+            # Remove currency symbol, VAT text and spaces
+            price_text = text.strip()
+            price_text = price_text.replace('EXCL. VAT', '')
+            price_text = price_text.replace('EXCL VAT', '')
             price_text = price_text.replace('(', '').replace(')', '')
+            price_text = price_text.replace('R', '')
+            price_text = price_text.strip()
+            
             # Remove any non-digit characters except dots and commas
             price_text = re.sub(r'[^\d.,]', '', price_text)
-            # Convert to proper decimal format
+            
+            # Convert to proper decimal format (handle both comma and dot)
             price_text = price_text.replace(',', '.')
             
             # If multiple decimals, keep only first one
             if price_text.count('.') > 1:
                 parts = price_text.split('.')
                 price_text = parts[0] + '.' + parts[1]
-                
+            
             if price_text:
                 price = float(price_text)
                 logger.debug(f"Extracted price: {price}")
                 return price
             return None
-            
+        
         except Exception as e:
             logger.error(f"Price extraction error: {e}")
             return None
@@ -88,56 +93,52 @@ class ACDCCrawler:
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 logger.info(f"Successfully fetched page for {sku}")
-                
-                # First try to find the product link
-                product_link = soup.find('a', href=lambda x: x and sku.lower() in x.lower())
-                if product_link:
-                    full_url = product_link['href'] if product_link['href'].startswith('http') else f"{self.base_url}{product_link['href']}"
-                    logger.info(f"Found product link: {full_url}")
-                    
-                    # Follow the product link
-                    product_response = self.session.get(full_url, headers=self.headers, timeout=30)
-                    if product_response.status_code == 200:
-                        product_soup = BeautifulSoup(product_response.content, 'html.parser')
-                        
-                        # Try to find LIST PRICE with various formats
-                        price_patterns = [
-                            r'LIST PRICE:.*R.*\(EXCL VAT\)',
-                            r'LIST PRICE:.*R[\d,.]+',
-                            r'R[\d,.]+ \(EXCL VAT\)'
-                        ]
-                        
-                        for pattern in price_patterns:
-                            list_price = product_soup.find(string=re.compile(pattern))
-                            if list_price:
-                                price = self._extract_price(list_price)
-                                if price:
-                                    logger.info(f"Found list price for {sku}: R{price}")
-                                    return price
-                
-                # Backup: Try to find price in search results
-                products = soup.find_all('article', class_='product-miniature')
-                for product in products:
-                    # Check if this product miniature contains our SKU
-                    if sku.lower() in str(product).lower():
-                        # Try different price elements
-                        price_elem = (
-                            product.find('span', class_='price') or
-                            product.find('div', class_='product-price-and-shipping') or
-                            product.find(string=re.compile(r'R[\d,.]+ \(EXCL VAT\)'))
-                        )
-                        if price_elem:
-                            price = self._extract_price(price_elem.get_text())
+
+                # Method 1: Try price_tag_c6 class (search results)
+                price_elem = soup.find('span', class_=['price_tag_c6', 'product-price'])
+                if price_elem:
+                    price = self._extract_price(price_elem.get_text())
+                    if price:
+                        logger.info(f"Found price (Method 1) for {sku}: R{price}")
+                        return price
+
+                # Method 2: Try span_head_c2 class (product page)
+                price_elem = soup.find('span', class_='span_head_c2')
+                if price_elem:
+                    price = self._extract_price(price_elem.get_text())
+                    if price:
+                        logger.info(f"Found price (Method 2) for {sku}: R{price}")
+                        return price
+
+                # Method 3: Try finding price in product header
+                price_elem = soup.find('div', class_='product_header_con_c5')
+                if price_elem:
+                    # Look for any price text
+                    price_text = price_elem.find(string=re.compile(r'R\s*[\d,]+\.?\d*'))
+                    if price_text:
+                        price = self._extract_price(price_text)
+                        if price:
+                            logger.info(f"Found price (Method 3) for {sku}: R{price}")
+                            return price
+
+                # Method 4: Try finding in product miniature
+                product_containers = soup.find_all('article', class_='product-miniature')
+                for container in product_containers:
+                    if sku.lower() in str(container).lower():
+                        # Check for price span
+                        price_span = container.find('span', class_='price')
+                        if price_span:
+                            price = self._extract_price(price_span.get_text())
                             if price:
-                                logger.info(f"Found price in search results for {sku}: R{price}")
+                                logger.info(f"Found price (Method 4) for {sku}: R{price}")
                                 return price
 
                 logger.warning(f"No price found for {sku} on page")
                 return None
-                
+            
             logger.error(f"Failed to get page: {response.status_code}")
             return None
-                
+            
         except Exception as e:
             logger.error(f"Error getting price from URL for {sku}: {e}")
             return None
@@ -179,7 +180,7 @@ class ACDCCrawler:
 if __name__ == "__main__":
     # Configure logging for testing
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
