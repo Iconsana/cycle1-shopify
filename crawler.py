@@ -8,6 +8,7 @@ import random
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ACDCCrawler:
@@ -32,12 +33,16 @@ class ACDCCrawler:
 
     def _extract_price(self, text):
         """Extract price from text"""
+        if not text:
+            return None
         try:
-            # Remove 'EXCL. VAT' and other text, keep numbers, dots, and commas
-            price_text = re.sub(r'[^\d,.]', '', text.replace('EXCL. VAT', ''))
+            # Remove 'EXCL. VAT' and 'R', keep numbers and decimal
+            price_text = text.replace('EXCL. VAT', '').replace('R', '').strip()
+            # Remove any non-digit characters except dots and commas
+            price_text = re.sub(r'[^\d.,]', '', price_text)
             # Convert to proper decimal format
             price_text = price_text.replace(',', '.')
-            # If multiple decimals, keep only the first one
+            # If multiple decimals, keep only first one
             if price_text.count('.') > 1:
                 parts = price_text.split('.')
                 price_text = parts[0] + '.' + parts[1]
@@ -49,41 +54,61 @@ class ACDCCrawler:
     def _clean_sku(self, sku):
         """Clean and standardize SKU format"""
         if sku:
-            return re.sub(r'[^A-Z0-9-]', '', sku.upper())
+            # Remove any accidental double slashes
+            sku = re.sub(r'/+', '/', sku)
+            # Remove trailing/leading slashes
+            sku = sku.strip('/')
+            # Replace slashes with dashes for URL
+            sku = sku.replace('/', '-')
+            # Remove any spaces
+            sku = sku.replace(' ', '')
+            # Convert to uppercase
+            sku = sku.upper()
+            return sku
         return None
 
     def get_price_from_url(self, url, sku):
         """Get price from a specific URL"""
         try:
+            logger.info(f"Fetching URL: {url}")
             response = self.session.get(url, headers=self.headers, timeout=30)
+            
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # Try to find price in stock table first
-                stock_table = soup.find('table')
-                if stock_table:
-                    for row in stock_table.find_all('tr'):
-                        if 'EDENVALE' in row.get_text():
-                            cols = row.find_all('td')
-                            if len(cols) >= 3:
-                                price_text = cols[2].get_text().strip()
-                                price = self._extract_price(price_text)
-                                if price:
-                                    logger.info(f"Found price for {sku} in stock table: R{price}")
-                                    return price
-
-                # Fallback to main price display
-                price_elem = (
-                    soup.find('span', class_='price') or 
-                    soup.find('div', class_='product-price-and-shipping').find('span', class_='price')
-                )
-                if price_elem:
-                    price = self._extract_price(price_elem.get_text())
-                    if price:
-                        logger.info(f"Found price for {sku} in main price: R{price}")
-                        return price
-
-            return None
+                # First check if we're on a product page
+                sku_elem = soup.find('p', class_='details_page_tag_text_c1')
+                if sku_elem and sku.upper() in sku_elem.text.upper():
+                    # Try to find LIST PRICE
+                    price_text = None
+                    list_price_text = soup.find(string=re.compile(r'LIST PRICE:.*', re.IGNORECASE))
+                    if list_price_text:
+                        price_text = list_price_text.strip()
+                    
+                    if price_text:
+                        price = self._extract_price(price_text)
+                        if price:
+                            logger.info(f"Found price for {sku} on product page: R{price}")
+                            return price
+                
+                # If not found on product page, check search results
+                products = soup.find_all('article', class_='product-miniature')
+                for product in products:
+                    product_sku = product.find('p', class_='details_page_tag_text_c1')
+                    if product_sku and sku.upper() in product_sku.text.upper():
+                        price_elem = product.find('span', class_='price')
+                        if price_elem:
+                            price = self._extract_price(price_elem.text)
+                            if price:
+                                logger.info(f"Found price for {sku} in search results: R{price}")
+                                return price
+                
+                logger.warning(f"No price found for {sku} on page")
+                return None
+            else:
+                logger.error(f"Failed to get page: {response.status_code}")
+                return None
+                
         except Exception as e:
             logger.error(f"Error getting price from URL for {sku}: {e}")
             return None
@@ -99,23 +124,18 @@ class ACDCCrawler:
                 clean_sku = self._clean_sku(sku)
                 
                 # Try direct product URL first
-                direct_url = f"https://acdc.co.za/product/{clean_sku.lower()}"
-                price = self.get_price_from_url(direct_url, clean_sku)
-                
-                # If direct URL fails, try search
-                if not price:
-                    search_url = f"https://acdc.co.za/search?controller=search&s={clean_sku}"
-                    price = self.get_price_from_url(search_url, clean_sku)
+                search_url = f"https://acdc.co.za/search?controller=search&s={clean_sku}"
+                price = self.get_price_from_url(search_url, clean_sku)
                 
                 if price:
-                    results[clean_sku] = {
+                    results[sku] = {
                         'price': price,
                         'timestamp': datetime.now().isoformat(),
                         'source': 'ACDC Dynamics'
                     }
-                    logger.info(f"Successfully processed {clean_sku}")
+                    logger.info(f"Successfully processed {sku}")
                 else:
-                    logger.warning(f"No price found for {clean_sku}")
+                    logger.warning(f"No price found for {sku}")
                 
                 # Random delay between requests
                 time.sleep(random.uniform(1, 2))
@@ -128,23 +148,9 @@ class ACDCCrawler:
         return results
 
 if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Test crawler with some SKUs
+    # Test the crawler
+    logging.basicConfig(level=logging.INFO)
     crawler = ACDCCrawler()
-    test_skus = [
-        "LEDT8-A4FR-DL",
-        "HS-B22-10W-DL"
-    ]
+    test_skus = ["DF1730SL-20A"]
     results = crawler.targeted_crawl(test_skus)
-    
-    # Print results
-    for sku, data in results.items():
-        print(f"SKU: {sku}")
-        print(f"Price: R{data['price']}")
-        print(f"Timestamp: {data['timestamp']}")
-        print("---")
+    print("Test Results:", results)
