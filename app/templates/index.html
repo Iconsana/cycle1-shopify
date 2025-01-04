@@ -135,11 +135,16 @@
 
     <script>
         const socket = io({
-            transports: ['websocket'],
-            upgrade: false,
-            reconnection: true,
-            reconnectionAttempts: 5
-        });
+    transports: ['websocket'],
+    upgrade: false,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 120000,
+    pingTimeout: 120000,
+    pingInterval: 15000
+});
 
         const progressBar = document.getElementById('progressBar');
         const progressSection = document.querySelector('.progress-section');
@@ -166,14 +171,37 @@
             addLogEntry('Connection error: ' + error.message, 'error');
         });
 
+        socket.on('disconnect', () => {
+    console.log('Disconnected from server');
+    addLogEntry('Connection lost - attempting to reconnect...', 'error');
+});
+        socket.on('reconnect', (attemptNumber) => {
+    console.log('Reconnected to server after', attemptNumber, 'attempts');
+    addLogEntry('Connection restored', 'success');
+});
+
+        socket.on('heartbeat', function(data) {
+    console.log('Heartbeat received:', new Date(data.timestamp * 1000).toISOString());
+    // Optional: Update UI to show connection is alive
+    document.getElementById('connectionStatus').className = 'connected';
+});
+
         socket.on('sync_progress', function(data) {
-            console.log('Progress update:', data);
-            progressSection.style.display = 'block';
-            progressBar.style.width = data.percentage + '%';
-            statusMessage.textContent = data.message;
-            productCount.textContent = `Products synced: ${data.current}/${data.total}`;
-            addLogEntry(data.message, data.status);
-        });
+    console.log('Progress update:', data);
+    progressSection.style.display = 'block';
+    progressBar.style.width = data.percentage + '%';
+    statusMessage.textContent = data.message;
+    productCount.textContent = `Products processed: ${data.current}/${data.total}`;
+    addLogEntry(data.message, data.status);
+    
+    if (data.status === 'error') {
+        submitBtn.disabled = false;
+        cancelBtn.style.display = 'none';
+    } else if (data.percentage === 100) {
+        submitBtn.disabled = false;
+        cancelBtn.style.display = 'none';
+    }
+})
 
         socket.on('sync_complete', function(data) {
             const message = `Sync completed. Uploaded: ${data.uploaded}, Failed: ${data.failed}`;
