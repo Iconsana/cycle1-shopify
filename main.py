@@ -238,7 +238,7 @@ def update_all_prices():
         # Start price updates in background
         def update_task():
             try:
-                results = monitor.check_all_prices()
+                results = monitor.update_prices()
                 socketio.emit('price_update_complete', {
                     'success': True,
                     'message': f"Updated {results['updated']} prices, {results['failed']} failed",
@@ -251,14 +251,16 @@ def update_all_prices():
                 })
 
         thread = Thread(target=update_task)
+        thread.daemon = True
         thread.start()
         
         return jsonify({
             'success': True,
-            'message': 'Price update started'
+            'message': 'Price check started'
         })
+        
     except Exception as e:
-        logger.error(f"Failed to start price update: {e}")
+        logger.error(f"Price check failed: {e}")
         return jsonify({
             'success': False,
             'message': str(e)
