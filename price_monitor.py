@@ -61,8 +61,7 @@ class PriceMonitor:
             return None
         except Exception as e:
             logger.error(f"Error getting price for {sku}: {e}")
-            return None        
-         
+            return None
 
     def update_single_product(self, row_number, sku):
         """Update a single product's price"""
@@ -120,54 +119,66 @@ class PriceMonitor:
             logger.error(f"Error updating product {sku}: {e}")
             return False
 
-    def check_all_prices(self):
-        """Check prices for all products"""
-        results = {
-            'updated': 0,
-            'failed': 0,
-            'errors': []
-        }
-        
+    def update_prices(self):
+        """Update prices using crawler approach"""
         try:
-            # Get all SKUs
+            # Get all products data
+            products_data = self.crawler.crawl_acdc_products()
+            
+            if not products_data:
+                return {
+                    'updated': 0,
+                    'failed': 0,
+                    'errors': ['Crawl failed to return data']
+                }
+            
+            # Get SKUs from sheet
             result = self.sheet.values().get(
                 spreadsheetId=self.spreadsheet_id,
                 range='A2:A'  # Skip header row
             ).execute()
             
             if not result.get('values'):
-                logger.error("No products found in sheet")
-                return results
-                
+                return {
+                    'updated': 0,
+                    'failed': 0,
+                    'errors': ['No SKUs found in sheet']
+                }
+            
+            updates = {
+                'updated': 0,
+                'failed': 0,
+                'errors': []
+            }
+            
+            # Update prices for each SKU
             for row_num, row in enumerate(result['values'], start=2):
-                try:
-                    sku = row[0]
-                    if self.update_single_product(row_num, sku):
-                        results['updated'] += 1
+                sku = row[0]
+                if sku in products_data:
+                    # Get EDENVALE price as default
+                    price_data = products_data[sku]
+                    price = price_data['prices'].get('EDENVALE')
+                    
+                    if price:
+                        self.update_single_product(row_num, sku)
+                        updates['updated'] += 1
                     else:
-                        results['failed'] += 1
-                        results['errors'].append(f"Failed to update {sku}")
-                    
-                    # Add delay between requests
-                    time.sleep(2)
-                    
-                except Exception as e:
-                    results['failed'] += 1
-                    results['errors'].append(f"Error processing {sku}: {str(e)}")
+                        updates['failed'] += 1
+                        updates['errors'].append(f"No price found for {sku}")
+                else:
+                    updates['failed'] += 1
+                    updates['errors'].append(f"SKU {sku} not found in crawled data")
+            
+            return updates
+            
+        except Exception as e:
+            logger.error(f"Price update error: {e}")
+            return {
+                'updated': 0,
+                'failed': 0,
+                'errors': [str(e)]
+            }
 
-# Add the new update_prices method
-    def update_prices(self):
-        """Update prices using crawler approach"""
-        [paste the update_prices function here]
-
-    # Modify check_all_prices to use update_prices
     def check_all_prices(self):
         """Check prices for all products"""
         return self.update_prices()
-        \
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error checking all prices: {e}")
-            return results
