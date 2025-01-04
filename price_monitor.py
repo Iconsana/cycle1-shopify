@@ -51,22 +51,26 @@ class PriceMonitor:
             logger.error(f"Connection test failed: {e}")
             return False
 
-    def get_acdc_price(self, sku):
-        """Get price using crawler"""
+    def get_skus_from_sheet(self):
+        """Get list of SKUs from sheet"""
         try:
-            products_data = self.crawler.crawl_acdc_products()
-            if products_data and sku in products_data:
-                price_data = products_data[sku]
-                return price_data['prices'].get('EDENVALE')
-            return None
+            result = self.sheet.values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range='A2:A'  # Skip header row
+            ).execute()
+            
+            if not result.get('values'):
+                logger.error("No SKUs found in sheet")
+                return []
+                
+            return [row[0] for row in result['values']]
         except Exception as e:
-            logger.error(f"Error getting price for {sku}: {e}")
-            return None
+            logger.error(f"Error getting SKUs: {e}")
+            return []
 
-    def update_single_product(self, row_number, sku):
-        """Update a single product's price"""
+    def update_product_price(self, row_number, sku, price_data):
+        """Update a single product's price in sheet"""
         try:
-            # Get current values
             range_name = f'A{row_number}:G{row_number}'
             result = self.sheet.values().get(
                 spreadsheetId=self.spreadsheet_id,
@@ -79,71 +83,55 @@ class PriceMonitor:
                 
             current_values = result['values'][0]
             current_price = float(current_values[2]) if len(current_values) > 2 else 0
+            new_price = price_data['price']
             
-            # Get new price from ACDC
-            acdc_price = self.get_acdc_price(sku)
+            # Calculate difference and status
+            price_diff = round(current_price - new_price, 2)
+            status = 'Price Changed' if abs(price_diff) > 0.01 else 'Up to Date'
             
-            if acdc_price is not None:
-                # Calculate difference and status
-                price_diff = round(current_price - acdc_price, 2)
-                status = 'Price Changed' if abs(price_diff) > 0.01 else 'Up to Date'
-                
-                # Prepare update values
-                values = [[
-                    sku,
-                    current_values[1] if len(current_values) > 1 else '',
-                    str(current_price),
-                    str(acdc_price),
-                    str(price_diff),
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    status
-                ]]
-                
-                # Update sheet
-                body = {
-                    'values': values
-                }
-                self.sheet.values().update(
-                    spreadsheetId=self.spreadsheet_id,
-                    range=range_name,
-                    valueInputOption='USER_ENTERED',
-                    body=body
-                ).execute()
-                
-                logger.info(f"Updated {sku} - Status: {status}")
-                return True
+            # Prepare update values
+            values = [[
+                sku,
+                current_values[1] if len(current_values) > 1 else '',
+                str(current_price),
+                str(new_price),
+                str(price_diff),
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                status
+            ]]
             
-            return False
-                
+            # Update sheet
+            body = {
+                'values': values
+            }
+            self.sheet.values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=range_name,
+                valueInputOption='USER_ENTERED',
+                body=body
+            ).execute()
+            
+            logger.info(f"Updated {sku} - Status: {status}")
+            return True
+            
         except Exception as e:
-            logger.error(f"Error updating product {sku}: {e}")
+            logger.error(f"Error updating {sku}: {e}")
             return False
 
     def update_prices(self):
-        """Update prices using crawler approach"""
+        """Update prices using targeted crawler"""
         try:
-            # Get all products data
-            products_data = self.crawler.crawl_acdc_products()
-            
-            if not products_data:
-                return {
-                    'updated': 0,
-                    'failed': 0,
-                    'errors': ['Crawl failed to return data']
-                }
-            
             # Get SKUs from sheet
-            result = self.sheet.values().get(
-                spreadsheetId=self.spreadsheet_id,
-                range='A2:A'  # Skip header row
-            ).execute()
-            
-            if not result.get('values'):
+            skus = self.get_skus_from_sheet()
+            if not skus:
                 return {
                     'updated': 0,
                     'failed': 0,
                     'errors': ['No SKUs found in sheet']
                 }
+            
+            # Get prices using targeted crawler
+            results = self.crawler.targeted_crawl(skus)
             
             updates = {
                 'updated': 0,
@@ -151,23 +139,17 @@ class PriceMonitor:
                 'errors': []
             }
             
-            # Update prices for each SKU
-            for row_num, row in enumerate(result['values'], start=2):
-                sku = row[0]
-                if sku in products_data:
-                    # Get EDENVALE price as default
-                    price_data = products_data[sku]
-                    price = price_data['prices'].get('EDENVALE')
-                    
-                    if price:
-                        self.update_single_product(row_num, sku)
+            # Update each SKU in sheet
+            for row_num, sku in enumerate(skus, start=2):
+                if sku in results:
+                    if self.update_product_price(row_num, sku, results[sku]):
                         updates['updated'] += 1
                     else:
                         updates['failed'] += 1
-                        updates['errors'].append(f"No price found for {sku}")
+                        updates['errors'].append(f"Failed to update {sku} in sheet")
                 else:
                     updates['failed'] += 1
-                    updates['errors'].append(f"SKU {sku} not found in crawled data")
+                    updates['errors'].append(f"No price found for {sku}")
             
             return updates
             
