@@ -177,4 +177,16 @@ class PriceMonitor:
             logger.info(f"Update complete: {updates}")
             return updates
             
-        except Exception
+        except Exception as e:
+            logger.error(f"Price update error: {e}")
+            logger.debug(f"Price update traceback: {traceback.format_exc()}")
+            return {
+                'updated': 0,
+                'failed': 0,
+                'errors': [str(e)]
+            }
+
+    def check_all_prices(self):
+        """Check prices for all products"""
+        logger.debug("Starting check_all_prices")
+        return self.update_prices()
