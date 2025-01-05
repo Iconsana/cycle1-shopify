@@ -53,21 +53,34 @@ class ACDCCrawler:
             
             logger.debug(f"After initial cleaning: {price_text}")
             
-            # Remove any non-digit characters except dots and commas
-            price_text = re.sub(r'[^\d.,]', '', price_text)
+            # Handle thousands separators and decimal points
+            # In South African format: R 6,077.00 or R 6 077.00
+            price_text = price_text.replace(' ', '')  # Remove spaces first
             
-            # Convert to proper decimal format
-            price_text = price_text.replace(',', '.')
+            # Check if we have both comma and dot
+            if ',' in price_text and '.' in price_text:
+                # Assume comma is thousands separator
+                price_text = price_text.replace(',', '')
+            else:
+                # If only comma, treat as decimal separator
+                price_text = price_text.replace(',', '.')
             
-            # If multiple decimals, keep only first one
-            if price_text.count('.') > 1:
-                parts = price_text.split('.')
-                price_text = parts[0] + '.' + parts[1]
+            # Clean up any remaining non-numeric chars except the decimal point
+            price_text = re.sub(r'[^\d.]', '', price_text)
             
             if price_text:
-                price = float(price_text)
-                logger.info(f"Successfully extracted price: {price}")
-                return price
+                try:
+                    price = float(price_text)
+                    logger.info(f"Successfully extracted price: {price}")
+                    # Basic validation - price should be reasonable
+                    if 0 < price < 1000000:  # Assuming no products over 1M Rand
+                        return price
+                    else:
+                        logger.warning(f"Price outside reasonable range: {price}")
+                        return None
+                except ValueError:
+                    logger.error(f"Could not convert price text to float: {price_text}")
+                    return None
             
             return None
             
@@ -116,22 +129,35 @@ class ACDCCrawler:
                         product_soup = BeautifulSoup(product_response.content, 'html.parser')
                         
                         # Try all possible price locations
-                        list_price = product_soup.find(string=re.compile(r'LIST PRICE:.*R.*'))
-                        if list_price:
-                            price = self._extract_price(list_price)
+                        # First try list price field
+                        list_price_text = None
+                        for text in product_soup.stripped_strings:
+                            if 'LIST PRICE:' in text:
+                                list_price_text = text
+                                break
+                        
+                        if list_price_text:
+                            price = self._extract_price(list_price_text)
                             if price:
                                 logger.info(f"Found list price: {price}")
                                 return price
                         
+                        # Try EXCL VAT price
                         excl_vat = product_soup.find('div', class_='product_header_con_c5')
                         if excl_vat:
-                            price_text = excl_vat.find(string=re.compile(r'R\s*[\d,\.]+'))
+                            price_text = None
+                            for text in excl_vat.stripped_strings:
+                                if 'R' in text and any(c.isdigit() for c in text):
+                                    price_text = text
+                                    break
+                            
                             if price_text:
                                 price = self._extract_price(price_text)
                                 if price:
                                     logger.info(f"Found excl VAT price: {price}")
                                     return price
                                 
+                        # Try span price
                         span_price = product_soup.find('span', class_='span_head_c2')
                         if span_price:
                             price = self._extract_price(span_price.get_text())
