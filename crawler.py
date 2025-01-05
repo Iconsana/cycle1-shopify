@@ -70,6 +70,42 @@ class ACDCCrawler:
             logger.error(f"Price extraction error: {e}")
             return None
 
+    def get_product_url(self, sku, title=None):
+        """Generate correct ACDC product URL"""
+        search_url = f"{self.base_url}/search?controller=search&s={sku}"
+        
+        try:
+            # First get search page to find full product URL
+            logger.info(f"Fetching search URL: {search_url}")
+            response = self.session.get(search_url, headers=self.headers, timeout=30)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Try to find the product link from the price tag
+                price_link = soup.find('a', class_='price_tag_c7')
+                if price_link and 'href' in price_link.attrs:
+                    logger.info(f"Found product URL from price tag: {price_link['href']}")
+                    return price_link['href']
+                    
+                # Try to find the link in product reference details
+                ref_link = soup.find('div', class_='product_ref_details').find('a') if soup.find('div', class_='product_ref_details') else None
+                if ref_link and 'href' in ref_link.attrs:
+                    logger.info(f"Found product URL from reference: {ref_link['href']}")
+                    return ref_link['href']
+                    
+                # Try to find any link containing the SKU
+                any_link = soup.find('a', href=lambda x: x and sku.lower() in x.lower())
+                if any_link:
+                    logger.info(f"Found product URL from SKU: {any_link['href']}")
+                    return any_link['href']
+                
+            logger.warning("Could not find product URL, using search URL")
+            return search_url
+            
+        except Exception as e:
+            logger.error(f"Error getting product URL: {e}")
+            return search_url
+
     def get_price_from_url(self, url, sku):
         """Get price from a specific URL"""
         try:
@@ -78,48 +114,50 @@ class ACDCCrawler:
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
-                logger.debug(f"Page content length: {len(response.content)}")
-
-                # Log the entire relevant section for debugging
-                price_sections = soup.find_all(['span', 'div'], class_=['price_tag_c6', 'span_head_c2', 'price'])
-                logger.debug(f"Found {len(price_sections)} price sections")
-                for section in price_sections:
-                    logger.debug(f"Price section HTML: {section}")
-
-                # Method 1: Try product page price (span_head_c2)
+                logger.debug("Successfully fetched page")
+                
+                # Method 1: Try price_tag_c6 with content attribute
+                price_elem = soup.find('span', class_=['product-price', 'price_tag_c6'])
+                if price_elem:
+                    if 'content' in price_elem.attrs:
+                        price = float(price_elem['content'])
+                        logger.info(f"Found price from content attribute: {price}")
+                        return price
+                    else:
+                        price = self._extract_price(price_elem.get_text())
+                        if price:
+                            logger.info(f"Found price from price_tag_c6: {price}")
+                            return price
+                
+                # Method 2: Try span_head_c2
                 price_elem = soup.find('span', class_='span_head_c2')
                 if price_elem:
-                    logger.debug(f"Found span_head_c2: {price_elem}")
                     price = self._extract_price(price_elem.get_text())
                     if price:
+                        logger.info(f"Found price from span_head_c2: {price}")
                         return price
-
-                # Method 2: Try search results price (price_tag_c6)
-                price_elem = soup.find('span', class_='price_tag_c6')
-                if price_elem:
-                    logger.debug(f"Found price_tag_c6: {price_elem}")
-                    price = self._extract_price(price_elem.get_text())
-                    if price:
-                        return price
-
-                # Method 3: Look for any price near the SKU
-                product_section = soup.find(string=re.compile(sku, re.IGNORECASE))
-                if product_section:
-                    parent = product_section.find_parent()
+                
+                # Method 3: Try finding price near SKU text
+                product_elem = soup.find(string=re.compile(sku, re.IGNORECASE))
+                if product_elem:
+                    parent = product_elem.find_parent('div')
                     if parent:
-                        price_text = parent.find(string=re.compile(r'R\s*[\d,]+\.?\d*'))
-                        if price_text:
-                            logger.debug(f"Found price near SKU: {price_text}")
-                            price = self._extract_price(price_text)
+                        # Look for price in nearby elements
+                        price_elems = parent.find_all(['span', 'div'], 
+                            class_=['price', 'price_tag_c6', 'product-price', 'span_head_c2'])
+                        for elem in price_elems:
+                            price = self._extract_price(elem.get_text())
                             if price:
+                                logger.info(f"Found price near SKU: {price}")
                                 return price
-
-                logger.warning(f"No price found for {sku}")
+                
+                # Debug: Log what we found
+                logger.debug("Price elements found on page:")
+                for elem in soup.find_all(['span', 'div'], class_=['price', 'product-price', 'price_tag_c6', 'span_head_c2']):
+                    logger.debug(f"Price element: {elem}")
+                
                 return None
-            
-            logger.error(f"Failed to get page: {response.status_code}")
-            return None
-            
+                
         except Exception as e:
             logger.error(f"Error getting price from URL for {sku}: {e}")
             return None
@@ -133,24 +171,20 @@ class ACDCCrawler:
             try:
                 logger.info(f"Processing {index}/{total_skus}: {sku}")
                 
-                # Try search URL first
-                search_url = f"{self.base_url}/search?controller=search&s={sku}"
-                price = self.get_price_from_url(search_url, sku)
-                
-                if not price:
-                    # Try direct product URL as backup
-                    product_url = f"{self.base_url}/product/{sku.lower()}"
+                # Get the correct product URL
+                product_url = self.get_product_url(sku)
+                if product_url:
                     price = self.get_price_from_url(product_url, sku)
-                
-                if price:
-                    results[sku] = {
-                        'price': price,
-                        'timestamp': datetime.now().isoformat(),
-                        'source': 'ACDC Dynamics'
-                    }
-                    logger.info(f"Successfully processed {sku}")
-                else:
-                    logger.warning(f"No price found for {sku}")
+                    
+                    if price:
+                        results[sku] = {
+                            'price': price,
+                            'timestamp': datetime.now().isoformat(),
+                            'source': 'ACDC Dynamics'
+                        }
+                        logger.info(f"Successfully processed {sku}")
+                    else:
+                        logger.warning(f"No price found for {sku}")
                 
                 # Random delay between requests
                 time.sleep(random.uniform(1, 2))
