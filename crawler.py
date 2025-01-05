@@ -112,6 +112,16 @@ class ACDCCrawler:
                         return price
                 else:
                     logger.debug("No price_tag_c6 element found")
+
+                # Try finding price by content attribute
+                price_elem = soup.find('span', attrs={'content': True})
+                if price_elem and 'content' in price_elem.attrs:
+                    try:
+                        price = float(price_elem['content'])
+                        logger.info(f"Found price via content attribute: R{price}")
+                        return price
+                    except ValueError:
+                        logger.debug("Invalid price in content attribute")
                 
                 # Log relevant HTML for debugging
                 logger.debug("Relevant HTML sections:")
