@@ -68,6 +68,14 @@ class ACDCCrawler:
                         logger.info(f"Found price: R{price}")
                         return price
                 
+                # Backup: try price_tag_c6
+                price_elem = soup.find('span', class_='price_tag_c6')
+                if price_elem:
+                    price = self._extract_price(price_elem.get_text())
+                    if price:
+                        logger.info(f"Found price: R{price}")
+                        return price
+                
                 logger.warning("No price found")
                 return None
             
@@ -78,31 +86,39 @@ class ACDCCrawler:
             logger.error(f"Error getting price: {e}")
             return None
 
-    def test_crawl(self):
-        """Test crawler with hardcoded SKU"""
-        try:
-            price = self.get_price()
-            
-            if price:
-                result = {
-                    'DF1730SL-20A': {
+    def targeted_crawl(self, sku_list):
+        """Crawl SKUs with hardcoded test URL - matches price_monitor.py expectation"""
+        results = {}
+        total_skus = len(sku_list)
+        
+        for index, sku in enumerate(sku_list, 1):
+            try:
+                logger.info(f"Processing {index}/{total_skus}: {sku}")
+                price = self.get_price(sku)
+                
+                if price:
+                    results[sku] = {
                         'price': price,
                         'timestamp': datetime.now().isoformat(),
                         'source': 'ACDC Dynamics'
                     }
-                }
-                logger.info(f"Test successful - found price: R{price}")
-                return result
-            else:
-                logger.warning("Test failed - no price found")
-                return {}
+                    logger.info(f"Successfully processed {sku}")
+                else:
+                    logger.warning(f"No price found for {sku}")
                 
-        except Exception as e:
-            logger.error(f"Test error: {e}")
-            return {}
+                # Random delay between requests
+                time.sleep(random.uniform(1, 2))
+                
+            except Exception as e:
+                logger.error(f"Error processing {sku}: {e}")
+                continue
+        
+        logger.info(f"Crawl completed. Found prices for {len(results)}/{total_skus} SKUs")
+        return results
 
 if __name__ == "__main__":
     # Test the crawler
     crawler = ACDCCrawler()
-    results = crawler.test_crawl()
+    test_skus = ["DF1730SL-20A"]
+    results = crawler.targeted_crawl(test_skus)
     print("Test Results:", results)
