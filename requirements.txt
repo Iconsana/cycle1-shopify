@@ -2,10 +2,10 @@ flask==2.3.3
 requests==2.31.0
 beautifulsoup4==4.12.2
 python-dotenv==1.0.0
-pandas==1.5.3
-numpy==1.23.5
+pandas>=1.5.0
+numpy>=1.23.0
 gunicorn==20.1.0
-ShopifyAPI>=8.0.0,<9.0.0
+shopify-python-api>=12.1.0
 flask-socketio==5.3.6
 python-socketio>=5.0.0
 eventlet==0.33.3
