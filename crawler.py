@@ -221,7 +221,7 @@ class ACDCCrawler:
                 threads.append(thread)
             
             # Wait for all threads in this batch to complete
-            for thread in thread:
+            for thread in threads:  # Fixed: Changed 'thread' to 'threads' in loop variable
                 thread.join()
             
             # Delay between batches
@@ -240,6 +240,6 @@ class ACDCCrawler:
 if __name__ == "__main__":
     # Test the crawler
     crawler = ACDCCrawler()
-    test_skus = ["DF1730SL-20A", "DF1730SL-20A"]  # Add more SKUs for testing
+    test_skus = ["DF1730SL-20A", "TR2-D09305"]  # Test SKUs
     results = crawler.targeted_crawl(test_skus)
     print("Test Results:", results)
