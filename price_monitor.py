@@ -52,8 +52,8 @@ class PriceMonitor:
             time.sleep(sleep_time)
         self.last_update_time = time.time()
 
-    def get_skus_and_current_prices(self):
-        """Get list of SKUs and their current prices from sheet"""
+    def get_skus_and_data(self):
+        """Get SKUs and their current data from sheet"""
         try:
             result = self.sheet.values().get(
                 spreadsheetId=self.spreadsheet_id,
@@ -64,18 +64,22 @@ class PriceMonitor:
                 logger.warning("No SKUs found in sheet")
                 return {}
             
-            sku_prices = {}
+            sku_data = {}
             for row in result['values']:
-                if row:  # Ensure row exists
-                    sku = row[0]  # SKU is in column A
-                    current_price = float(row[2]) if len(row) > 2 and row[2] else 0  # Current Price in column C
-                    sku_prices[sku] = current_price
+                if len(row) >= 1:  # Ensure at least SKU exists
+                    sku = row[0]
+                    title = row[1] if len(row) > 1 else ''
+                    current_price = float(row[2]) if len(row) > 2 and row[2] else 0
+                    sku_data[sku] = {
+                        'title': title,
+                        'current_price': current_price
+                    }
             
-            logger.info(f"Found {len(sku_prices)} SKUs with prices in sheet")
-            return sku_prices
+            logger.info(f"Found {len(sku_data)} SKUs with data in sheet")
+            return sku_data
             
         except Exception as e:
-            logger.error(f"Error getting SKUs and prices: {e}")
+            logger.error(f"Error getting SKUs and data: {e}")
             logger.debug(f"Get SKUs traceback: {traceback.format_exc()}")
             return {}
 
@@ -118,7 +122,7 @@ class PriceMonitor:
         
         return False
 
-    def process_updates(self, price_data, current_prices):
+    def process_updates(self, price_data, sku_data):
         """Process updates in batches"""
         results = defaultdict(int)
         results['errors'] = []
@@ -128,20 +132,23 @@ class PriceMonitor:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
             for sku, data in price_data.items():
-                current_price = current_prices.get(sku, 0)
+                existing_data = sku_data.get(sku, {})
+                current_price = existing_data.get('current_price', 0)
+                title = existing_data.get('title', '')
                 new_price = data.get('price', 0)
-                price_difference = current_price - new_price if current_price and new_price else 0
+                price_difference = round(current_price - new_price, 2) if current_price and new_price else 0
                 
                 row_data = [
-                    sku,                        # A: SKU
-                    data.get('title', ''),      # B: Title
-                    str(current_price),         # C: Current Price
-                    str(new_price),             # D: ACDC Price
-                    str(price_difference),      # E: Price Difference
-                    timestamp,                  # F: Last Checked
-                    'Updated'                   # G: Status
+                    sku,                    # A: SKU
+                    title,                  # B: Title
+                    str(current_price),     # C: Current Price
+                    str(new_price),         # D: ACDC Price
+                    str(price_difference),  # E: Price Difference
+                    timestamp,              # F: Last Checked
+                    'ACDC Dynamic Updated'  # G: Status
                 ]
                 all_updates.append(row_data)
+                logger.debug(f"Prepared update for SKU {sku}: Current Price: {current_price}, New Price: {new_price}, Difference: {price_difference}")
 
             # Process in batches
             for i in range(0, len(all_updates), self.batch_size):
@@ -150,6 +157,7 @@ class PriceMonitor:
                 
                 if self.update_batch(batch, start_row):
                     results['updated'] += len(batch)
+                    logger.info(f"Successfully updated batch {i//self.batch_size + 1}")
                 else:
                     results['failed'] += len(batch)
                     batch_skus = [row[0] for row in batch]
@@ -168,9 +176,10 @@ class PriceMonitor:
     def check_all_prices(self):
         """Main method to check and update all prices"""
         try:
-            # Get SKUs and current prices from sheet
-            current_prices = self.get_skus_and_current_prices()
-            if not current_prices:
+            # Get SKUs and current data from sheet
+            sku_data = self.get_skus_and_data()
+            if not sku_data:
+                logger.error("No SKUs found in sheet")
                 return {
                     'updated': 0,
                     'failed': 0,
@@ -178,18 +187,19 @@ class PriceMonitor:
                 }
 
             # Get prices using crawler
-            logger.info(f"Starting price check for {len(current_prices)} SKUs")
-            price_data = self.crawler.targeted_crawl(list(current_prices.keys()))
+            logger.info(f"Starting price check for {len(sku_data)} SKUs")
+            price_data = self.crawler.targeted_crawl(list(sku_data.keys()))
             
             if not price_data:
+                logger.error("No prices found by crawler")
                 return {
                     'updated': 0,
-                    'failed': len(current_prices),
+                    'failed': len(sku_data),
                     'errors': ['No prices found']
                 }
             
             # Process updates in batches
-            results = self.process_updates(price_data, current_prices)
+            results = self.process_updates(price_data, sku_data)
             logger.info(f"Price check completed: {results}")
             return results
             
