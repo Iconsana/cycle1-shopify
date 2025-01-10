@@ -39,6 +39,7 @@ socketio = SocketIO(
 # Constants
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', '1VDmG5diadJ1hNdv6ZnHfT1mVTGFM-xejWKe_ACWiuRo')
 cancel_event = Event()
+DEFAULT_MARKUP = 40  # Default 40% markup
 
 def emit_progress(message, current, total, status='processing'):
     """Emit progress updates to the client"""
@@ -104,6 +105,7 @@ def check_prices():
     """Check prices for products"""
     try:
         logger.info("Starting price check process")
+        markup_percentage = float(request.args.get('markup', DEFAULT_MARKUP))
         monitor = PriceMonitor(SPREADSHEET_ID)
         
         # Test connection first
@@ -126,8 +128,8 @@ def check_prices():
                 # Emit starting status
                 emit_progress('Starting price check...', 0, 100, 'processing')
 
-                # Get price updates
-                results = monitor.check_all_prices()
+                # Get price updates with markup
+                results = monitor.check_all_prices(markup_percentage)
                 
                 # Stop heartbeat
                 cancel_event.set()
@@ -188,21 +190,11 @@ def index():
         logger.info("Attempting to render index.html")
         logger.info(f"Current working directory: {os.getcwd()}")
         logger.info(f"Template folder: {app.template_folder}")
-        return render_template('index.html')
+        return render_template('index.html', default_markup=DEFAULT_MARKUP)
     except Exception as e:
         logger.error(f"Error rendering template: {e}")
         logger.error(traceback.format_exc())
         return f"Template error: {str(e)}", 500
-
-@app.route('/debug-info')
-def debug_info():
-    """Debug endpoint to check configuration"""
-    return jsonify({
-        'cwd': os.getcwd(),
-        'template_folder': app.template_folder,
-        'template_list': os.listdir(app.template_folder) if os.path.exists(app.template_folder) else [],
-        'exists': os.path.exists(os.path.join(app.template_folder, 'index.html'))
-    })
 
 if __name__ == '__main__':
     logger.info(f"Starting server with template directory: {template_dir}")
