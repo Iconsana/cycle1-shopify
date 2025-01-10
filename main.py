@@ -3,13 +3,13 @@ from flask_socketio import SocketIO, emit
 import pandas as pd
 from datetime import datetime
 import os
-from scraper import scrape_acdc_products, save_to_csv
 import time
 import json
+import logging
 from threading import Event, Thread
 import threading
 from price_monitor import PriceMonitor
-import logging
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -19,21 +19,20 @@ logger = logging.getLogger(__name__)
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'templates')
 app = Flask(__name__, template_folder=template_dir)
 
-# Log template directory for debugging
 logger.info(f"Template directory: {template_dir}")
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 
-# Configure SocketIO with increased timeout and more frequent pings
+# Configure SocketIO
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
     async_mode='eventlet', 
     logger=True, 
     engineio_logger=True,
-    ping_timeout=120,  # 2 minute timeout
-    ping_interval=15,  # More frequent pings
-    max_http_buffer_size=1e8,  # Larger buffer
+    ping_timeout=120,
+    ping_interval=15,
+    max_http_buffer_size=1e8,
     async_handlers=True
 )
 
@@ -79,18 +78,22 @@ def start_heartbeat():
 def test_monitor_connection():
     """Test Google Sheets connection"""
     try:
+        logger.info("Testing Google Sheets connection")
         monitor = PriceMonitor(SPREADSHEET_ID)
         if monitor.test_connection():
+            logger.info("Successfully connected to Google Sheets")
             return jsonify({
                 'success': True,
                 'message': 'Successfully connected to Google Sheets'
             })
+        logger.error("Failed to connect to Google Sheets")
         return jsonify({
             'success': False,
             'message': 'Failed to connect to Google Sheets'
         })
     except Exception as e:
         logger.error(f"Connection test failed: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
             'message': str(e)
@@ -100,10 +103,12 @@ def test_monitor_connection():
 def check_prices():
     """Check prices for products"""
     try:
+        logger.info("Starting price check process")
         monitor = PriceMonitor(SPREADSHEET_ID)
         
         # Test connection first
         if not monitor.test_connection():
+            logger.error("Failed to connect to Google Sheets")
             return jsonify({
                 'success': False,
                 'message': 'Failed to connect to Google Sheets'
@@ -138,6 +143,7 @@ def check_prices():
 
             except Exception as e:
                 logger.error(f"Price check failed: {e}")
+                logger.error(traceback.format_exc())
                 emit_progress(
                     f'Error: {str(e)}',
                     0,
@@ -159,6 +165,7 @@ def check_prices():
         
     except Exception as e:
         logger.error(f"Price check failed: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
             'message': str(e)
@@ -174,82 +181,6 @@ def cancel_sync():
         logger.error(f"Cancel sync failed: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/sync', methods=['POST'])
-def sync_products():
-    """Main sync endpoint"""
-    try:
-        cancel_event.clear()
-        
-        start_page = int(request.form.get('start_page', 1))
-        end_page = int(request.form.get('end_page', 50))
-        
-        if start_page < 1 or end_page > 4331:
-            raise ValueError("Invalid page range")
-        if start_page > end_page:
-            raise ValueError("Start page must be less than end page")
-        
-        # Start heartbeat
-        heartbeat_thread = start_heartbeat()
-        
-        products = scrape_acdc_products(
-            start_page=start_page,
-            end_page=end_page,
-            progress_callback=emit_progress,
-            cancel_event=cancel_event
-        )
-        
-        if products:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = os.path.join('/tmp', f'acdc_products_{start_page}_to_{end_page}_{timestamp}.csv')
-            saved_file = save_to_csv(products, filename)
-            
-            # Stop heartbeat
-            cancel_event.set()
-            heartbeat_thread.join(timeout=1)
-            
-            return jsonify({
-                'success': True,
-                'message': 'Scraping completed. Starting download...',
-                'download_url': f'/download-csv?file={os.path.basename(saved_file)}',
-                'filename': os.path.basename(saved_file)
-            })
-        
-        return jsonify({
-            'success': False,
-            'message': 'No products found to sync'
-        })
-            
-    except Exception as e:
-        logger.error(f"Sync failed: {e}")
-        # Ensure heartbeat stops
-        cancel_event.set()
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
-
-@app.route('/download-csv')
-def download_csv():
-    """Download generated CSV file"""
-    try:
-        filename = request.args.get('file')
-        if not filename:
-            return "No filename specified", 400
-            
-        file_path = os.path.join('/tmp', os.path.basename(filename))
-        if not os.path.exists(file_path):
-            return "File not found", 404
-            
-        return send_file(
-            file_path,
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name=filename
-        )
-    except Exception as e:
-        logger.error(f"Download failed: {e}")
-        return str(e), 500
-
 @app.route('/')
 def index():
     """Landing page"""
@@ -260,6 +191,7 @@ def index():
         return render_template('index.html')
     except Exception as e:
         logger.error(f"Error rendering template: {e}")
+        logger.error(traceback.format_exc())
         return f"Template error: {str(e)}", 500
 
 @app.route('/debug-info')
