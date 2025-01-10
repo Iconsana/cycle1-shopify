@@ -120,6 +120,7 @@ class ACDCCrawler:
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
+                # First try to find direct price in search results
                 price_elem = soup.find('span', class_='product-price price_tag_c6')
                 if price_elem:
                     price = self._extract_price(price_elem.get_text())
@@ -127,6 +128,7 @@ class ACDCCrawler:
                         logger.info(f"Found price in search results: {price}")
                         return price
 
+                # Try to find product link in search results
                 product_elem = soup.find('a', class_='price_tag_c7', href=True)
                 if not product_elem:
                     product_elem = soup.find('a', href=lambda x: x and sku.lower() in x.lower())
@@ -138,10 +140,12 @@ class ACDCCrawler:
                         
                     logger.info(f"Found product URL: {product_url}")
                     
+                    # Get product page
                     product_response = self.session.get(product_url, headers=self.headers, timeout=30)
                     if product_response.status_code == 200:
                         product_soup = BeautifulSoup(product_response.content, 'html.parser')
                         
+                        # Try all possible price locations
                         list_price_text = None
                         for text in product_soup.stripped_strings:
                             if 'LIST PRICE:' in text:
@@ -190,8 +194,7 @@ class ACDCCrawler:
         """Rate-limited price retrieval"""
         try:
             self.request_limiter.acquire()
-            price = self.get_price(sku)
-            return price
+            return self.get_price(sku)
         finally:
             self.request_limiter.release()
 
@@ -245,6 +248,8 @@ class ACDCCrawler:
             
             for thread in threads:
                 thread.join()
+
+            logger.info(f"Completed batch {batch_num + 1}/{total_batches}")
 
         logger.info(f"Batch crawl completed. Found prices for {len(self.results)}/{len(sku_list)} SKUs")
         return self.results
