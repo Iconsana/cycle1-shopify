@@ -42,6 +42,17 @@ class PriceMonitor:
             logger.debug(f"Initialization traceback: {traceback.format_exc()}")
             raise
 
+    def calculate_variant_price(self, acdc_price, markup_percentage):
+        """Calculate variant price with markup and VAT"""
+        try:
+            markup_multiplier = 1 + (markup_percentage / 100)
+            base_price = float(acdc_price) * markup_multiplier  # Apply markup
+            variant_price = base_price * 1.15  # Add 15% VAT
+            return round(variant_price, 2)
+        except Exception as e:
+            logger.error(f"Error calculating variant price: {e}")
+            return 0
+
     def wait_for_rate_limit(self):
         """Ensure minimum time between updates"""
         current_time = time.time()
@@ -92,7 +103,7 @@ class PriceMonitor:
             try:
                 self.wait_for_rate_limit()
                 
-                range_name = f'A{start_row}:G{start_row + len(batch_data) - 1}'
+                range_name = f'A{start_row}:H{start_row + len(batch_data) - 1}'  # Updated to include Variant Price
                 body = {'values': batch_data}
                 
                 logger.debug(f"Updating range: {range_name} with {len(batch_data)} rows")
@@ -122,7 +133,7 @@ class PriceMonitor:
         
         return False
 
-    def process_updates(self, price_data, sku_data):
+    def process_updates(self, price_data, sku_data, markup_percentage):
         """Process updates in batches"""
         results = defaultdict(int)
         results['errors'] = []
@@ -137,6 +148,7 @@ class PriceMonitor:
                 title = existing_data.get('title', '')
                 new_price = data.get('price', 0)
                 price_difference = round(current_price - new_price, 2) if current_price and new_price else 0
+                variant_price = self.calculate_variant_price(new_price, markup_percentage)
                 
                 row_data = [
                     sku,                    # A: SKU
@@ -145,10 +157,11 @@ class PriceMonitor:
                     str(new_price),         # D: ACDC Price
                     str(price_difference),  # E: Price Difference
                     timestamp,              # F: Last Checked
-                    'ACDC Dynamic Updated'  # G: Status
+                    'ACDC Dynamic Updated', # G: Status
+                    str(variant_price)      # H: Variant Price
                 ]
                 all_updates.append(row_data)
-                logger.debug(f"Prepared update for SKU {sku}: Current Price: {current_price}, New Price: {new_price}, Difference: {price_difference}")
+                logger.debug(f"Prepared update for SKU {sku}: Current: {current_price}, New: {new_price}, Variant: {variant_price}")
 
             # Process in batches
             for i in range(0, len(all_updates), self.batch_size):
@@ -173,7 +186,7 @@ class PriceMonitor:
             results['errors'].append(str(e))
             return dict(results)
 
-    def check_all_prices(self):
+    def check_all_prices(self, markup_percentage=40):
         """Main method to check and update all prices"""
         try:
             # Get SKUs and current data from sheet
@@ -198,8 +211,8 @@ class PriceMonitor:
                     'errors': ['No prices found']
                 }
             
-            # Process updates in batches
-            results = self.process_updates(price_data, sku_data)
+            # Process updates in batches with markup
+            results = self.process_updates(price_data, sku_data, markup_percentage)
             logger.info(f"Price check completed: {results}")
             return results
             
@@ -222,14 +235,3 @@ class PriceMonitor:
             logger.error(f"Connection test failed: {e}")
             logger.debug(f"Connection test traceback: {traceback.format_exc()}")
             return False
-
-if __name__ == "__main__":
-    # Test the monitor
-    SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
-    if SPREADSHEET_ID:
-        monitor = PriceMonitor(SPREADSHEET_ID)
-        if monitor.test_connection():
-            results = monitor.check_all_prices()
-            print("Update Results:", results)
-    else:
-        print("SPREADSHEET_ID environment variable not set")
