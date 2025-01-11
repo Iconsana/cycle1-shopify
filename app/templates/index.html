@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ACDC Product Sync</title>
-    <!-- Shopify Polaris -->
-    <link rel="stylesheet" href="https://unpkg.com/@shopify/polaris@12.0.0/build/esm/styles.css"/>
-    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         body {
@@ -73,6 +70,7 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            margin: 5px;
         }
 
         button:disabled {
@@ -81,258 +79,73 @@
         }
 
         input[type="number"] {
-            padding: 5px;
-            margin-left: 10px;
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100px;
         }
 
-        .form-section {
+        .settings-section {
+            background-color: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
             margin-bottom: 20px;
+        }
+
+        .markup-control {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .markup-control label {
+            margin-right: 10px;
+        }
+
+        .tooltip {
+            position: relative;
+            display: inline-block;
+            margin-left: 5px;
+            cursor: help;
+        }
+
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 200px;
+            background-color: #555;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -100px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
         }
     </style>
 </head>
-    
 <body>
     <div class="sync-container">
         <h1>ACDC Product Sync</h1>
         
-        <div class="form-section">
-            <h2>Sync Settings</h2>
-            <form id="syncForm">
-                <div>
-                    <label for="startPage">Start Page:</label>
-                    <input type="number" id="startPage" name="start_page" min="1" max="4331" value="1">
-                </div>
-                <div>
-                    <label for="endPage">End Page:</label>
-                    <input type="number" id="endPage" name="end_page" min="1" max="4331" value="30">
-                </div>
-                <button type="submit" id="submitBtn">Start Sync</button>
-                <button type="button" id="cancelBtn" style="display: none;">Cancel Sync</button>
-            </form>
-        </div>
-
-        <div class="progress-section" style="display: none;">
-            <h2>Sync Progress</h2>
-            <div class="progress-bar">
-                <div class="progress" id="progressBar"></div>
-            </div>
-            <p id="statusMessage">Preparing sync...</p>
-            <p id="productCount">Products synced: 0</p>
-        </div>
-
-        <div class="log-container" id="logContainer"></div>
-    </div>
-
-     <div class="form-section" style="margin-top: 20px; padding: 20px; border: 1px solid #ddd; border-radius: 4px;">
-            <h2>Price Monitor Settings</h2>
-            <div>
-                <button type="button" id="testConnectionBtn" class="monitor-btn">Test Google Sheets Connection</button>
-                <button type="button" id="checkPricesBtn" class="monitor-btn">Update Prices</button>
-                <button type="button" id="viewPricesBtn" class="monitor-btn">View Price History</button>
-            </div>
-            <div id="monitorStatus" style="margin-top: 10px;"></div>
-        </div>
-
-    <script>
-        const socket = io({
-    transports: ['websocket'],
-    upgrade: false,
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    timeout: 120000,
-    pingTimeout: 120000,
-    pingInterval: 15000
-});
-
-        const progressBar = document.getElementById('progressBar');
-        const progressSection = document.querySelector('.progress-section');
-        const statusMessage = document.getElementById('statusMessage');
-        const productCount = document.getElementById('productCount');
-        const logContainer = document.getElementById('logContainer');
-        const submitBtn = document.getElementById('submitBtn');
-        const cancelBtn = document.getElementById('cancelBtn');
-
-        function addLogEntry(message, type = 'info') {
-            const entry = document.createElement('div');
-            entry.className = `log-entry log-${type}`;
-            entry.textContent = message;
-            logContainer.insertBefore(entry, logContainer.firstChild);
-        }
-
-        socket.on('connect', () => {
-            console.log('Connected to server');
-            addLogEntry('Connected to server', 'success');
-        });
-
-        socket.on('connect_error', (error) => {
-            console.error('Socket connection error:', error);
-            addLogEntry('Connection error: ' + error.message, 'error');
-        });
-
-        socket.on('disconnect', () => {
-    console.log('Disconnected from server');
-    addLogEntry('Connection lost - attempting to reconnect...', 'error');
-});
-        socket.on('reconnect', (attemptNumber) => {
-    console.log('Reconnected to server after', attemptNumber, 'attempts');
-    addLogEntry('Connection restored', 'success');
-});
-
-        socket.on('heartbeat', function(data) {
-    console.log('Heartbeat received:', new Date(data.timestamp * 1000).toISOString());
-    // Optional: Update UI to show connection is alive
-    document.getElementById('connectionStatus').className = 'connected';
-});
-
-        socket.on('sync_progress', function(data) {
-    console.log('Progress update:', data);
-    progressSection.style.display = 'block';
-    progressBar.style.width = data.percentage + '%';
-    statusMessage.textContent = data.message;
-    productCount.textContent = `Products processed: ${data.current}/${data.total}`;
-    addLogEntry(data.message, data.status);
-    
-    if (data.status === 'error') {
-        submitBtn.disabled = false;
-        cancelBtn.style.display = 'none';
-    } else if (data.percentage === 100) {
-        submitBtn.disabled = false;
-        cancelBtn.style.display = 'none';
-    }
-})
-
-        socket.on('sync_complete', function(data) {
-            const message = `Sync completed. Uploaded: ${data.uploaded}, Failed: ${data.failed}`;
-            statusMessage.textContent = message;
-            addLogEntry(message, 'success');
-            submitBtn.disabled = false;
-            cancelBtn.style.display = 'none';
-            
-            if (data.errors && data.errors.length > 0) {
-                data.errors.forEach(error => {
-                    addLogEntry(error, 'error');
-                });
-            }
-        });
-
-        socket.on('sync_error', function(data) {
-            statusMessage.textContent = 'Error: ' + data.message;
-            addLogEntry('Error: ' + data.message, 'error');
-            submitBtn.disabled = false;
-            cancelBtn.style.display = 'none';
-        });
-
-        document.getElementById('syncForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            // Clear previous logs
-            logContainer.innerHTML = '';
-            progressBar.style.width = '0%';
-            statusMessage.textContent = 'Preparing sync...';
-            productCount.textContent = 'Products synced: 0';
-            
-            // Show progress section and update buttons
-            progressSection.style.display = 'block';
-            submitBtn.disabled = true;
-            cancelBtn.style.display = 'inline-block';
-            
-            addLogEntry('Starting sync process...', 'info');
-            
-            try {
-                const response = await fetch('/sync', {
-                    method: 'POST',
-                    body: new FormData(e.target)
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    addLogEntry(data.message, 'success');
-                    if (data.download_url) {
-                        window.location.href = data.download_url;
-                    }
-                    
-                    if (data.shopify_sync?.started) {
-                        addLogEntry('Shopify sync started', 'info');
-                    } else if (data.shopify_sync?.error) {
-                        addLogEntry('Shopify sync error: ' + data.shopify_sync.error, 'error');
-                    }
-                } else {
-                    addLogEntry('Error: ' + data.message, 'error');
-                    submitBtn.disabled = false;
-                    cancelBtn.style.display = 'none';
-                }
-            } catch (error) {
-                addLogEntry('Error: ' + error.message, 'error');
-                submitBtn.disabled = false;
-                cancelBtn.style.display = 'none';
-            }
-        });
-
-        cancelBtn.addEventListener('click', async () => {
-            try {
-                const response = await fetch('/cancel', {
-                    method: 'POST'
-                });
-                const data = await response.json();
-                if (data.success) {
-                    addLogEntry('Sync cancelled', 'info');
-                    submitBtn.disabled = false;
-                    cancelBtn.style.display = 'none';
-                } else {
-                    addLogEntry('Error cancelling sync: ' + data.message, 'error');
-                }
-            } catch (error) {
-                addLogEntry('Error cancelling sync: ' + error.message, 'error');
-            }
-        });
-    </script>
-
-<!-- Add JavaScript for the new buttons -->
-        <script>
-            document.getElementById('testConnectionBtn').addEventListener('click', async () => {
-                try {
-                    addLogEntry('Testing Google Sheets connection...', 'info');
-                    const response = await fetch('/monitor/test-connection');
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        addLogEntry('Google Sheets connection successful!', 'success');
-                    } else {
-                        addLogEntry('Connection failed: ' + data.message, 'error');
-                    }
-                } catch (error) {
-                    addLogEntry('Error: ' + error.message, 'error');
-                }
-            });
-
-            document.getElementById('checkPricesBtn').addEventListener('click', async () => {
-                try {
-                    addLogEntry('Starting price check...', 'info');
-                    const response = await fetch('/monitor/check-prices');
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        addLogEntry('Price check completed: ' + data.message, 'success');
-                    } else {
-                        addLogEntry('Price check failed: ' + data.message, 'error');
-                    }
-                } catch (error) {
-                    addLogEntry('Error: ' + error.message, 'error');
-                }
-            });
-
-            document.getElementById('viewPricesBtn').addEventListener('click', async () => {
-                try {
-                    // Open Google Sheet in new tab
-                    window.open('https://docs.google.com/spreadsheets/d/1VDmG5diadJ1hNdv6ZnHfT1mVTGFM-xejWKe_ACWiuRo/edit', '_blank');
-                } catch (error) {
-                    addLogEntry('Error opening spreadsheet: ' + error.message, 'error');
-                }
-            });
-        </script>
-    
-</body>
-</html>
+        <div class="settings-section">
+            <h2>Price Settings</h2>
+            <div class="markup-control">
+                <label for="markupPercentage">Markup Percentage:</label>
+                <input type="number" 
+                       id="markupPercentage" 
+                       name="markup" 
+                       min="0" 
+                       max="500" 
+                       value="40" 
+                       step="1">
+                <span>%</span>
