@@ -51,17 +51,19 @@
             border: 1px solid #ddd;
             padding: 10px;
             border-radius: 4px;
+            background-color: #fff;
         }
 
         .log-entry {
             margin: 5px 0;
             padding: 5px;
             border-radius: 3px;
+            font-family: monospace;
         }
 
-        .log-success { background-color: #dff0d8; }
-        .log-error { background-color: #f2dede; }
-        .log-info { background-color: #d9edf7; }
+        .log-success { background-color: #dff0d8; color: #3c763d; }
+        .log-error { background-color: #f2dede; color: #a94442; }
+        .log-info { background-color: #d9edf7; color: #31708f; }
 
         button {
             background-color: #4CAF50;
@@ -71,6 +73,12 @@
             border-radius: 4px;
             cursor: pointer;
             margin: 5px;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #45a049;
         }
 
         button:disabled {
@@ -78,58 +86,62 @@
             cursor: not-allowed;
         }
 
-        input[type="number"] {
-            padding: 8px;
-            margin: 5px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            width: 100px;
-        }
-
         .settings-section {
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-radius: 4px;
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
             margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
 
         .markup-control {
             display: flex;
             align-items: center;
-            margin-bottom: 10px;
+            gap: 10px;
+            margin: 15px 0;
         }
 
         .markup-control label {
-            margin-right: 10px;
+            font-weight: bold;
+            min-width: 150px;
         }
 
-        .tooltip {
-            position: relative;
+        input[type="number"] {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 5px rgba(74, 175, 80, 0.2);
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .status-badge {
             display: inline-block;
-            margin-left: 5px;
-            cursor: help;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
         }
 
-        .tooltip .tooltiptext {
-            visibility: hidden;
-            width: 200px;
-            background-color: #555;
-            color: #fff;
-            text-align: center;
-            border-radius: 6px;
-            padding: 5px;
-            position: absolute;
-            z-index: 1;
-            bottom: 125%;
-            left: 50%;
-            margin-left: -100px;
-            opacity: 0;
-            transition: opacity 0.3s;
+        .status-badge.connected {
+            background-color: #dff0d8;
+            color: #3c763d;
         }
 
-        .tooltip:hover .tooltiptext {
-            visibility: visible;
-            opacity: 1;
+        .status-badge.disconnected {
+            background-color: #f2dede;
+            color: #a94442;
         }
     </style>
 </head>
@@ -149,3 +161,142 @@
                        value="40" 
                        step="1">
                 <span>%</span>
+            </div>
+            <div class="control-group">
+                <button type="button" id="checkPricesBtn" class="monitor-btn">Update Prices</button>
+                <button type="button" id="cancelBtn" style="display: none;">Cancel Update</button>
+            </div>
+        </div>
+
+        <div class="progress-section" style="display: none;">
+            <h2>Progress</h2>
+            <div class="progress-bar">
+                <div class="progress" id="progressBar"></div>
+            </div>
+            <p id="statusMessage">Preparing update...</p>
+            <p id="productCount">Products processed: 0</p>
+        </div>
+
+        <div id="connectionStatus" class="status-badge disconnected">Disconnected</div>
+        <div class="log-container" id="logContainer"></div>
+    </div>
+
+    <script>
+        const socket = io({
+            transports: ['websocket'],
+            upgrade: false,
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 120000,
+            pingTimeout: 120000,
+            pingInterval: 15000
+        });
+
+        const progressBar = document.getElementById('progressBar');
+        const progressSection = document.querySelector('.progress-section');
+        const statusMessage = document.getElementById('statusMessage');
+        const productCount = document.getElementById('productCount');
+        const logContainer = document.getElementById('logContainer');
+        const checkPricesBtn = document.getElementById('checkPricesBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const markupInput = document.getElementById('markupPercentage');
+
+        function addLogEntry(message, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+            logContainer.insertBefore(entry, logContainer.firstChild);
+        }
+
+        socket.on('connect', () => {
+            connectionStatus.textContent = 'Connected';
+            connectionStatus.className = 'status-badge connected';
+            addLogEntry('Connected to server', 'success');
+        });
+
+        socket.on('disconnect', () => {
+            connectionStatus.textContent = 'Disconnected';
+            connectionStatus.className = 'status-badge disconnected';
+            addLogEntry('Connection lost - attempting to reconnect...', 'error');
+        });
+
+        socket.on('reconnect', (attemptNumber) => {
+            connectionStatus.textContent = 'Connected';
+            connectionStatus.className = 'status-badge connected';
+            addLogEntry(`Reconnected after ${attemptNumber} attempts`, 'success');
+        });
+
+        socket.on('sync_progress', function(data) {
+            progressSection.style.display = 'block';
+            progressBar.style.width = data.percentage + '%';
+            statusMessage.textContent = data.message;
+            productCount.textContent = `Products processed: ${data.current}/${data.total}`;
+            addLogEntry(data.message, data.status);
+            
+            if (data.status === 'error' || data.percentage === 100) {
+                checkPricesBtn.disabled = false;
+                cancelBtn.style.display = 'none';
+            }
+        });
+
+        checkPricesBtn.addEventListener('click', async () => {
+            try {
+                const markup = markupInput.value;
+                logContainer.innerHTML = '';
+                progressBar.style.width = '0%';
+                statusMessage.textContent = 'Starting price update...';
+                productCount.textContent = 'Products processed: 0';
+                
+                progressSection.style.display = 'block';
+                checkPricesBtn.disabled = true;
+                cancelBtn.style.display = 'inline-block';
+                
+                addLogEntry('Starting price update...', 'info');
+                
+                const response = await fetch(`/monitor/check-prices?markup=${markup}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    addLogEntry(data.message, 'success');
+                } else {
+                    addLogEntry('Error: ' + data.message, 'error');
+                    checkPricesBtn.disabled = false;
+                    cancelBtn.style.display = 'none';
+                }
+            } catch (error) {
+                addLogEntry('Error: ' + error.message, 'error');
+                checkPricesBtn.disabled = false;
+                cancelBtn.style.display = 'none';
+            }
+        });
+
+        cancelBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/cancel', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                if (data.success) {
+                    addLogEntry('Update cancelled', 'info');
+                    checkPricesBtn.disabled = false;
+                    cancelBtn.style.display = 'none';
+                } else {
+                    addLogEntry('Error cancelling update: ' + data.message, 'error');
+                }
+            } catch (error) {
+                addLogEntry('Error cancelling update: ' + error.message, 'error');
+            }
+        });
+
+        markupInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                checkPricesBtn.click();
+            }
+        });
+    </script>
+</body>
+</html>
